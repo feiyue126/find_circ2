@@ -682,7 +682,7 @@ class SpliceSiteStorage(object):
         return self.sites[coord]
 
     def store_list(self,output):
-        output.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
+        output.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category','flags','flag_counts']) + "\n")
 
         for (chrom,start,end,sense),hit in self.sites.items():
             if hit.counts == 0.:
@@ -717,7 +717,7 @@ class SpliceSiteStorage(object):
                 
 class MultiEventRecorder(object):
     def __init__(self):
-        pass
+        multi_file.write("#" + "\t".join(['chrom','start','end','name','score','strand','lin_cons','lin_incons','unspliced_cons','unspliced_incons']) + "\n")
     
     def record(self,circ_hit,lin_cons,lin_incons,unspliced_cons,unspliced_incons):
         
