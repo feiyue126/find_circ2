@@ -717,13 +717,13 @@ class SpliceSiteStorage(object):
                 
 class MultiEventRecorder(object):
     def __init__(self):
-        multi_file.write("#" + "\t".join(['chrom','start','end','name','score','strand','lin_cons','lin_incons','unspliced_cons','unspliced_incons']) + "\n")
+        multi_file.write("#" + "\t".join(['chrom','start','end','name','score','strand','fragment_name','lin_cons','lin_incons','unspliced_cons','unspliced_incons']) + "\n")
     
-    def record(self,circ_hit,lin_cons,lin_incons,unspliced_cons,unspliced_incons):
+    def record(self,frag_name,circ_hit,lin_cons,lin_incons,unspliced_cons,unspliced_incons):
         
         score = len(lin_cons) - 10 * len(lin_incons) + len(unspliced_cons) - 10 * len(unspliced_incons)
         circ_chrom,circ_start,circ_end,circ_sense = circ_hit.coord
-        cols = [circ_chrom, str(circ_start), str(circ_end), "ME:"+circ_hit.name, str(score), circ_sense]
+        cols = [circ_chrom, str(circ_start), str(circ_end), "ME:"+circ_hit.name, str(score), circ_sense, frag_name]
         
         if not lin_cons:
             cols.append("NO_LIN_CONS")
@@ -1230,7 +1230,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 
         if (unspliced_cons or unspliced_incons or lin_cons or lin_incons) and options.multi_events:
             # we have a multi-splicing event!
-            multi_events.record(circ, lin_cons, lin_incons, unspliced_cons, unspliced_incons)
+            multi_events.record(frag_name, circ, lin_cons, lin_incons, unspliced_cons, unspliced_incons)
 
         for w in warns:
             circ.add_flag(w,frag_name)
