@@ -1367,7 +1367,7 @@ def main():
             if mate1: process_mate(mate1)
             if mate2: process_mate(mate2)
 
-            if not seg_circ_splices and not options.nolinear:
+            if not seg_circ_splices and options.nolinear:
                 continue 
 
             if seg_circ_splices or seg_linear_splices:

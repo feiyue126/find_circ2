@@ -3,10 +3,18 @@
 GENOME_HG19=/scratch/systems/hg19/genome/hg19.fa
 INDEX_HG19=/scratch/systems/hg19/genome/hg19.fa
 
-cdr1as_test: cdr1as_test_out/splice_sites.bed
+cdr1as_test: cdr1as_test_out/circ_splice_sites.bed
 	@printf "\n>>> comparing to known CDR1as result.\n\n"
 	../cmp_bed.py cdr1as_test_out/splice_sites.bed cdr1as_reference.bed > /dev/null
-	
+
+unit_test: test_out/circ_splice_sites.bed
+	wc -l test_out/circ_splice_sites.bed
+	wc -l test_out/lin_splice_sites.bed
+
+test_out/circ_splice_sites.bed: test_ref.fa test_reads.sam
+	@printf "\n>>> aligning anchors and piping through find_circ.py\n\n"
+	cat test_reads.sam | ../find_circ.py --genome test_ref.fa -n test -o test_out
+
 clean:
 	rm -f bt2*
 	rm -f *.bam
@@ -50,7 +58,7 @@ hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_spliced_read
 	@printf "\n>>> aligning HEK293 anchors and piping through find_circ.py\n\n"
 	mkdir -p hek_test_out
 	bwa mem -t16 -A2 -B10 -k 15 -T 1 $(INDEX_HG19) hek_spliced_reads.fa | \
-			../find_circ.py --bwa-mem --genome $(GENOME_HG19) \
+			../find_circ.py --genome $(GENOME_HG19) \
 				--name=hek_test --output=hek_test_out \
 				--throughput \
 
