@@ -388,7 +388,7 @@ parser.add_option("","--known-circ",dest="known_circ",type=str,default="",help="
 parser.add_option("","--known-lin",dest="known_lin",type=str,default="",help="file with known linear splice junctions (BED6)")
 parser.add_option("-o","--output",dest="output",default="find_circ_run",help="where to store output")
 parser.add_option("-q","--silent",dest="silent",default=False,action="store_true",help="suppress any normal output to stdout. Automatically switched on when using --stdout redirection")
-parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
+parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
 parser.add_option("","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=15,help="anchor size (default=15)")
@@ -408,6 +408,7 @@ parser.add_option("-B","--bam",dest="bam",default=False,action="store_true",help
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
 parser.add_option("","--chunk-size",dest="chunksize",type=int,default=100000,help="number of reads to be processed in one chunk (default=100000)")
 parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
+parser.add_option("","--test",dest="test",default=False,action="store_true",help="Test mode: parse read splicing from read name and compare to reconstructed splicing. Use with specially prepared test reads only! (useful for automated regression testing)")
 parser.add_option("","--no-linear",dest="nolinear",default=False,action="store_true",help="Do not investigate linear junctions, unless associated with another backsplice event (saves some time)")
 parser.add_option("","--no-multi",dest="multi_events",default=True,action="store_false",help="Do not record multi-events (saves some time)")
 options,args = parser.parse_args()
@@ -442,6 +443,10 @@ circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"spliced_reads.fastq.gz"),"w")
 multi_file = file(os.path.join(options.output,"multi_events.tsv"),"w")
+if options.test:
+    test_file = file(os.path.join(options.output,"test_results.tsv"),"w")
+else:
+    test_file = None
 
 # redirect output to stdout, if requested
 if options.stdout:
@@ -1060,7 +1065,7 @@ class MateSegments(object):
         internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in self.proper_segs])
         
         # sort by internal start position
-        seg_by_seq = sorted(self.proper_segs,key = lambda seg: internal_starts[seg])
+        seg_by_seq = sorted(self.proper_segs, key = lambda seg: internal_starts[seg])
         
         # iterate over consecutive pairs of segments to find the 
         # splices between them
@@ -1084,14 +1089,14 @@ class MateSegments(object):
                 N['seg_too_short_skip'] += 1
                 continue
 
-            r_start = min(start_a,start_b)
-            r_end = max(end_a,end_b)
+            r_start = min(start_a, start_b)
+            r_end = max(end_a, end_b)
                 
             ## anchor pairs that make it up to here are interesting
             if bam_out:
                 bam_out.write(seg_a)
 
-            yield JunctionSpan(seg_a,seg_b,self.primary,r_start,r_end,weight)
+            yield JunctionSpan(seg_a, seg_b, self.primary, r_start, r_end, weight)
 
         if bam_out:
             bam_out.write(seg_b)
@@ -1102,6 +1107,12 @@ multi_events = MultiEventRecorder()
 
 N = defaultdict(float)
 
+def validate_hits_for_test_fragment(frag_name, junctions, unspliced_mates, seg_broken):
+    """
+    Parse the fragment structure from the read identifier and compare to reconstructed junctions.
+    """
+    test_file.write('{0}\n'.format(frag_name))
+    
 
 def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, seg_broken):
     """
@@ -1118,7 +1129,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
     
     if options.debug:
         print ">record_hits({0}) #circ_junc_spans={1} #lin_junc_spans={2} #unspliced_mates={3} #seg_broken={4}".format(
-            frag_name,len(circ_junc_spans),len(linear_junc_spans),len(unspliced_mates),len(seg_broken) )
+            frag_name, len(circ_junc_spans), len(linear_junc_spans), len(unspliced_mates), len(seg_broken) )
 
     # record all observed backsplice events
     circ_coords = set()
@@ -1195,6 +1206,9 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
             if not options.allhits:
                 break 
 
+    if options.test:
+        validate_hits_for_test_fragment(frag_name, junctions, unspliced_mates, seg_broken)
+            
     if circ_coords:
         # investigate unspliced mates
         unspliced_cons = set()

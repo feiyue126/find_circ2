@@ -2,6 +2,19 @@
 __pycache__/
 *.py[cod]
 
+# mapping and other indices
+*.byo_index
+*.bt2
+*.amb
+*.ann
+*.bwt
+*.pac
+*.sa
+
+# markdown/pango output
+*.html
+*.pdf
+
 # C extensions
 *.so
 
