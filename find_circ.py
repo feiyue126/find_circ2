@@ -1107,11 +1107,127 @@ multi_events = MultiEventRecorder()
 
 N = defaultdict(float)
 
-def validate_hits_for_test_fragment(frag_name, junctions, unspliced_mates, seg_broken):
+def parse_test_read(align_str):
+    chrom = None
+    strand = None
+    start = None
+    end = None
+    
+    lin_juncs = set()
+    circ_juncs = set()
+    unspliced = set()
+
+    for mate_str in align_str.split('|'):
+        spliced = False
+        for code in mate_str.split(';'):
+            parts = code.split(':')
+            op = parts[0]
+            if op == 'O':
+                chrom, start, strand = parts[1:]
+                start = int(start)
+                end = start
+                
+            elif op == 'M':
+                end += int(parts[1])
+                
+            elif op == 'LS':
+                left, right = int(parts[1])+start, int(parts[2])+start
+                lin_juncs.add( (chrom, left, right, strand) )
+                spliced = True
+                end = right
+                
+            elif op == 'CS':
+                left, right = int(parts[1])+start, int(parts[2])+start
+                circ_juncs.add( (chrom, left, right, strand) )
+                spliced = True
+                end = left
+
+        if not spliced and chrom:
+            unspliced.add( (chrom, start, end, strand) )
+
+    return lin_juncs, circ_juncs, unspliced
+
+
+def validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_coords, seg_broken):
     """
     Parse the fragment structure from the read identifier and compare to reconstructed junctions.
     """
-    test_file.write('{0}\n'.format(frag_name))
+    # O:testbed_plus:140:+;M:20;LS:160:240;M:80;LS:320:400;M:20
+    
+    unspliced_coords = set(unspliced_coords)
+    if not '___' in frag_name:
+        out = [frag_name, "N/A", "N/A", "N/A","N/A"]
+        test_file.write('{0}\n'.format("\t".join(out)))
+        return
+       
+    lin_ref, circ_ref, unspliced_ref = parse_test_read(frag_name.split("___")[-1])
+    
+    if options.debug:
+        print "STR",align_str
+        print "LIN_REF",sorted(lin_ref)
+        print "CIRC_REF",sorted(circ_ref)
+        print "UNSPLICED_REF",sorted(unspliced_ref)
+        
+        print "lin_junctions",sorted(lin_coords)
+        print "circ_junctions",sorted(circ_coords)
+        print "unspliced_mates",sorted(unspliced_mates)
+
+    lin_flags = set()
+    if lin_ref - lin_coords:
+        missed = ','.join([str(j) for j in sorted(lin_ref - lin_coords)])
+        lin_flags.add( 'MISSED_LINEAR_JUNCTIONS:{0}'.format(missed) )
+        
+    if lin_coords - lin_ref:
+        spur = ','.join([str(j) for j in sorted(lin_coords - lin_ref)])
+        lin_flags.add( 'SPURIOUS_LINEAR_JUNCTIONS:{0}'.format(spur) )
+        
+    circ_flags = set()
+    if circ_ref - circ_coords:
+        missed = ','.join([str(j) for j in sorted(circ_ref - circ_coords)])
+        circ_flags.add( 'MISSED_CIRCULAR_JUNCTIONS:{0}'.format(missed) )
+        
+    if circ_coords - circ_ref:
+        spur = ','.join([str(j) for j in sorted(circ_coords - circ_ref)])
+        circ_flags.add( 'SPURIOUS_CIRCULAR_JUNCTIONS:{0}'.format(spur) )
+    
+    unspliced_flags = set()
+    if unspliced_ref - unspliced_coords:
+        missed = ','.join([str(j) for j in sorted(unspliced_ref - unspliced_coords)])
+        unspliced_flags.add( 'MISSED_UNSPLICED:{0}'.format(missed) )
+        
+    if unspliced_coords - unspliced_ref:
+        spur = ','.join([str(j) for j in sorted(unspliced_coords - unspliced_ref)])
+        unspliced_flags.add( 'SPURIOUS_UNSPLICED:{0}'.format(spur) )
+    
+    if lin_flags:
+        lin_str = ";".join(sorted(lin_flags))
+    elif lin_ref:
+        lin_str = "LIN_OK"
+    else:
+        lin_str = "N/A"
+
+    if circ_flags:
+        circ_str = ";".join(sorted(circ_flags))
+    elif circ_ref:
+        circ_str = "CIRC_OK"
+    else:
+        circ_str = "N/A"
+        
+    if unspliced_flags:
+        unspliced_str = ";".join(sorted(unspliced_flags))
+    elif unspliced_ref:
+        unspliced_str = "CIRC_OK"
+    else:
+        unspliced_str = "N/A"
+
+    if seg_broken:
+        broken = ";".join(sorted(seg_broken))
+        broken_str = 'BROKEN_SEGMENTS:{0}'.format(broken)
+    else:
+        broken_str = "N/A"
+
+    out = [frag_name, lin_str, circ_str, unspliced_str, broken_str]
+    test_file.write('{0}\n'.format("\t".join(out)))
     
 
 def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, seg_broken):
@@ -1180,7 +1296,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
     # record all observed linear events
     lin_cons = set()
     lin_incons = set()
-
+    lin_coords = set()
     for junc_span in linear_junc_spans:
         splices = junc_span.find_breakpoints()
 
@@ -1194,6 +1310,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
         for splice in splices:
             lin = linear_splices.add(splice)
             junctions.add(lin)
+            lin_coords.add(lin.coord)
 
             if circ_coords:
                 if splice.start <= circ_start or splice.end >= circ_end:
@@ -1207,7 +1324,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
                 break 
 
     if options.test:
-        validate_hits_for_test_fragment(frag_name, junctions, unspliced_mates, seg_broken)
+        validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_mates, seg_broken)
             
     if circ_coords:
         # investigate unspliced mates
