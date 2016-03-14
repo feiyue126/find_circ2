@@ -11,6 +11,9 @@ unit_test: test_out/circ_splice_sites.bed
 	wc -l test_out/circ_splice_sites.bed
 	wc -l test_out/lin_splice_sites.bed
 
+test_reads.sam: test_reads.fa
+	bwa mem -k 15 -T 1 test_ref.fa test_reads.fa > test_reads.sam
+
 test_out/circ_splice_sites.bed: test_ref.fa test_reads.sam
 	@printf "\n>>> aligning anchors and piping through find_circ.py\n\n"
 	cat test_reads.sam | ../find_circ.py --genome test_ref.fa -n test -o test_out
