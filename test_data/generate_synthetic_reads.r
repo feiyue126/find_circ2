@@ -15,7 +15,8 @@
 # change log (reverse chronological) #
 ######################################
 
-# 2016-03-29: added merging of mate information as requested by Marvin
+# 2016-03-29: switched to relative coordinates for splice junction annotation as requested by Marvin
+#             added merging of mate information as requested by Marvin
 # 2016-03-21: initial version (uncommented messy script with fixed parameters for EA_cel10T sample)
 
 
@@ -462,8 +463,8 @@ llply(llply
                                                      ,tag.linear_splice
                                                      ,tag.circular_splice
                                                      ) %>%
-                                               paste(readends[exon]-1     # switch back to 0-based coordinates
-                                                    ,readstarts[exon+1]-1 # switch back to 0-based coordinates
+                                               paste(readends[exon]-readstarts[1]     # switch to relative coordinates
+                                                    ,readstarts[exon+1]-readstarts[1] # switch to relative coordinates
                                                     ,sep=sep.tag
                                                     )
                                               ,sep=sep.tags
