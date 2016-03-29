@@ -4,16 +4,19 @@
 # general information #
 #######################
 
-# file:     generate_synthetic_reads.r
-# created:  2016-03-21
-# author:   Marcel Schilling <marcel.schilling@mdc-berlin.de>
-# purpose:  generate synthetic reads based on known circRNAs (in BED format)
+# file:         generate_synthetic_reads.r
+# created:      2016-03-21
+# last update:  2016-03-29
+# author:       Marcel Schilling <marcel.schilling@mdc-berlin.de>
+# purpose:      generate synthetic reads based on known circRNAs (in BED format)
 
 
 ######################################
 # change log (reverse chronological) #
 ######################################
 
+# 2016-03-29: switched to relative coordinates for splice junction annotation as requested by Marvin
+#             added merging of mate information as requested by Marvin
 # 2016-03-21: initial version (uncommented messy script with fixed parameters for EA_cel10T sample)
 
 
@@ -71,6 +74,7 @@ tag.linear_splice<-"LS"
 tag.circular_splice<-"CS"
 sep.tag<-":"
 sep.tags<-";"
+sep.mates<-"|"
 read1.fa<-"synthetic_reads.R1.fa.gz"
 read2.fa<-"synthetic_reads.R2.fa.gz"
 
@@ -459,8 +463,8 @@ llply(llply
                                                      ,tag.linear_splice
                                                      ,tag.circular_splice
                                                      ) %>%
-                                               paste(readends[exon]-1     # switch back to 0-based coordinates
-                                                    ,readstarts[exon+1]-1 # switch back to 0-based coordinates
+                                               paste(readends[exon]-readstarts[1]     # switch to relative coordinates
+                                                    ,readstarts[exon+1]-readstarts[1] # switch to relative coordinates
                                                     ,sep=sep.tag
                                                     )
                                               ,sep=sep.tags
@@ -481,7 +485,21 @@ llply(llply
 llply(do.call
      ,what=c
 #     ,.parallel=T
-     )
+     ) %>%
+(
+  function(mates){
+    names(mates$read1)<-reads %>%
+                        llply(names) %>%
+                        {
+                          paste(.$read1
+                               ,.$read2
+                               ,sep=sep.mates
+                               )
+                        }
+    names(mates$read2)<-names(mates$read1)
+    mates
+  }
+)
 
 
 ###############
