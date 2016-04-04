@@ -459,7 +459,10 @@ if options.stdout:
 
 if args:
     logger.info('reading from {0}'.format(args[0]))
-    sam_input = pysam.Samfile(args[0],'rb')
+    if args[0].endswith('sam'):
+        sam_input = pysam.Samfile(args[0],'r')
+    else:
+        sam_input = pysam.Samfile(args[0],'rb')
 else:
     logger.info('reading from stdin')
     sam_input = pysam.Samfile('-','r')
@@ -1227,7 +1230,7 @@ def validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unsplice
         unspliced_str = "N/A"
 
     if seg_broken:
-        broken = ";".join(sorted(seg_broken))
+        broken = ";".join([str(b) for b in sorted(seg_broken)])
         broken_str = 'BROKEN_SEGMENTS:{0}'.format(broken)
     else:
         broken_str = "N/A"
@@ -1342,7 +1345,8 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
                 return chrom, align.pos, align.aend, "*"
 
         unspliced_coords = set([extract_coords(mate) for mate in unspliced_mates])
-        validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_coords, seg_broken)
+        seg_broken_coords = set([extract_coords(seg) for seg in seg_broken])
+        validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_coords, seg_broken_coords)
             
     if circ_coords:
         # investigate unspliced mates

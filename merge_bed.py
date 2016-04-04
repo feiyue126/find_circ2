@@ -36,18 +36,22 @@ def read_to_hash(fname,ds=0,de=0,flank=0,cover=False):
         if line.startswith("#"):
             continue
         line = line.strip()
-        chrom,start,end,name,score,sense = line.split('\t')[:6]
+        parts = line.split('\t')
+        if options.bed6:
+            parts = parts[:6]
+
+        chrom,start,end,name,score,sense = parts[:6]
         start,end = int(start)+ds,int(end)+de
 
         #print (chrom,start,end,sense)
-        pos[(chrom,start,end,sense)] = line
+        pos[(chrom,start,end,sense)] = parts
         
         if flank:
             for x in xrange(flank):
-                pos[(chrom,start-x,end,sense)] = line
-                pos[(chrom,start+x,end,sense)] = line
-                pos[(chrom,start,end-x,sense)] = line
-                pos[(chrom,start,end+x,sense)] = line
+                pos[(chrom,start-x,end,sense)] = parts
+                pos[(chrom,start+x,end,sense)] = parts
+                pos[(chrom,start,end-x,sense)] = parts
+                pos[(chrom,start,end+x,sense)] = parts
         
         #if cover:
             #for x in xrange
@@ -126,9 +130,7 @@ def consensus_cols(lines,comb):
     
     from itertools import izip_longest
     parts = []
-    source = enumerate(izip_longest(*[l.rstrip().split('\t') for l in lines],fillvalue=""))
-    if options.bed6:
-        source = enumerate(izip_longest(*[l.rstrip().split('\t')[:6] for l in lines],fillvalue=""))
+    source = enumerate(izip_longest(*[l for l in lines],fillvalue=""))
     for i,column in source:
         #print i,column
         if i in col_map:
@@ -145,7 +147,7 @@ if options.verbatim:
         cols = [comstr]
         for name in com:
             cols.append("%s : " % name)
-            cols.append(by_name[name][pos])
+            cols.append("\t".join(by_name[name][pos]))
 
         print "\t".join(cols)
        
