@@ -790,8 +790,11 @@ class Splice(object):
 
     @property
     def coord(self):
-        return (self.chrom,self.start,self.end,self.strand)
-
+        if self.start < self.end:
+            return (self.chrom,self.start,self.end,self.strand)
+        else:
+            return (self.chrom,self.end,self.start,self.strand)
+        
 class JunctionSpan(object):
     def __init__(self,align_A,align_B,primary,q_start,q_end,weight):
         self.primary = primary
@@ -1107,7 +1110,7 @@ multi_events = MultiEventRecorder()
 
 N = defaultdict(float)
 
-def parse_test_read(align_str):
+def parse_test_read(align_str, fix_marcel=False):
     chrom = None
     strand = None
     start = None
@@ -1143,7 +1146,10 @@ def parse_test_read(align_str):
                 end = left
 
         if not spliced and chrom:
-            unspliced.add( (chrom, start, end, strand) )
+            if options.stranded:
+                unspliced.add( (chrom, start, end, strand) )
+            else:
+                unspliced.add( (chrom, start, end, "*") )
 
     return lin_juncs, circ_juncs, unspliced
 
@@ -1163,14 +1169,14 @@ def validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unsplice
     lin_ref, circ_ref, unspliced_ref = parse_test_read(frag_name.split("___")[-1])
     
     if options.debug:
-        print "STR",align_str
+        print "STR",frag_name.split("___")[-1]
         print "LIN_REF",sorted(lin_ref)
         print "CIRC_REF",sorted(circ_ref)
         print "UNSPLICED_REF",sorted(unspliced_ref)
         
         print "lin_junctions",sorted(lin_coords)
         print "circ_junctions",sorted(circ_coords)
-        print "unspliced_mates",sorted(unspliced_mates)
+        print "unspliced_mates",sorted(unspliced_coords)
 
     lin_flags = set()
     if lin_ref - lin_coords:
@@ -1216,7 +1222,7 @@ def validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unsplice
     if unspliced_flags:
         unspliced_str = ";".join(sorted(unspliced_flags))
     elif unspliced_ref:
-        unspliced_str = "CIRC_OK"
+        unspliced_str = "UNSPLICED_OK"
     else:
         unspliced_str = "N/A"
 
@@ -1324,7 +1330,19 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
                 break 
 
     if options.test:
-        validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_mates, seg_broken)
+        def extract_coords(align):
+            chrom = fast_chrom_lookup(align)
+            if options.stranded:
+                if align.is_reverse:
+                    return chrom, align.pos, align.aend, "-"
+                else:
+                    return chrom, align.pos, align.aend, "+"
+            else:
+                # unspliced segments are reported without strand information!
+                return chrom, align.pos, align.aend, "*"
+
+        unspliced_coords = set([extract_coords(mate) for mate in unspliced_mates])
+        validate_hits_for_test_fragment(frag_name, lin_coords, circ_coords, unspliced_coords, seg_broken)
             
     if circ_coords:
         # investigate unspliced mates

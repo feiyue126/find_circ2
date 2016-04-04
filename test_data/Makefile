@@ -23,6 +23,7 @@ clean:
 	rm -f *.bam
 	rm -f *.byo_index anchors_cdr1as_test.fastq
 	rm -rf cdr1as_test_out hek_test_out
+	rm -f synthetic_reads.R1.fa.gz synthetic_reads.R2.fa.gz
 
 bt2_cdr1as_locus.4.bt2: CDR1as_locus.fa
 	@printf ">>> building bowtie2 index\n\n"
@@ -78,3 +79,9 @@ hek_test_out/splice_sites2.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_test_out/sp
 				--stats=hek_test_out/hek_test2.log \
 				--reads=hek_test_out/spliced_reads2.fa \
 				> hek_test_out/splice_sites2.bed
+
+synthetic_reads.R1.fa.gz synthetic_reads.R2.fa.gz : wbcel235.circs.bed.gz | SYNTHETIC_READS
+.SECONDARY : SYNTHETIC_READS
+SYNTHETIC_READS : wbcel235.circs.bed.gz
+	@printf "\n>>> generating artificial reads based on known circRNAs\n"
+	./generate_synthetic_reads.r

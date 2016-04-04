@@ -1,0 +1,23 @@
+#######################
+# general information #
+#######################
+
+# file:     .gitignore
+# created:  2016-03-21
+# author:   Marcel Schilling <marcel.schilling@mdc-berlin.de>
+# purpose:  untrack automatically generated test data
+
+
+######################################
+# change log (reverse chronological) #
+######################################
+
+# 2016-03-21: initial version (synthetic reads)
+
+
+###################
+# synthetic reads #
+###################
+
+/synthetic_reads.R1.fa.gz
+/synthetic_reads.R2.fa.gz
