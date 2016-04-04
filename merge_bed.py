@@ -26,7 +26,13 @@ from numpy import *
 def read_to_hash(fname,ds=0,de=0,flank=0,cover=False):
     #print "loading",fname
     pos = {}
-    for line in file(fname):
+    def src(fname):
+        if fname == '-':
+            return sys.stdin
+        else:
+            return file(fname)
+
+    for line in src(fname):
         if line.startswith("#"):
             continue
         line = line.strip()
