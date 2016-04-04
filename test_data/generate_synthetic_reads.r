@@ -15,7 +15,8 @@
 # change log (reverse chronological) #
 ######################################
 
-# 2016-04-04: fixed collapsing of all fragments from the same circRNA to the same start position /
+# 2016-04-04: fixed read naming
+#             fixed collapsing of all fragments from the same circRNA to the same start position /
 #             removed duplicates
 # 2016-03-29: switched to relative coordinates for splice junction annotation as requested by Marvin
 #             added merging of mate information as requested by Marvin
@@ -483,11 +484,17 @@ llply(do.call
      ) %>%
 (
   function(mates){
-    names(mates$read1)<-reads %>%
-                        llply(names) %>%
+    names(mates$read1)<-mates %>%
+                        llply(names) %$%
                         {
-                          paste(.$read1
-                               ,.$read2
+
+                          paste(read1
+                               ,read2 %>%
+                                strsplit(sep.annotation
+                                        ,fixed=T
+                                        ) %>%
+                                `[[`(1) %>%
+                                `[`(2)
                                ,sep=sep.mates
                                )
                         }
