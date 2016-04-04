@@ -11,14 +11,23 @@ usage = """
 
 parser = optparse.OptionParser(usage=usage)
 parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
+parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 options,args = parser.parse_args()
 
-import importlib
-system = importlib.import_module("byo.systems.{options.system}".format(**locals()))
-
+if options.system:
+    import importlib
+    system = importlib.import_module("byo.systems.{options.system}".format(**locals()))
+else:
+    from byo.track import load_track
+    class S(object):
+        pass
+    
+    system = S()
+    system.genome = load_track(options.genome)
+    
 def test_str(mate):
     ori = mate.origin
     #print "mate origin",mate.origin, mate.origin_spliced, mate.map_to_exon(mate.origin_spliced+1)
