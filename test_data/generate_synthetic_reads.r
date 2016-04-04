@@ -6,7 +6,7 @@
 
 # file:         generate_synthetic_reads.r
 # created:      2016-03-21
-# last update:  2016-03-29
+# last update:  2016-04-04
 # author:       Marcel Schilling <marcel.schilling@mdc-berlin.de>
 # purpose:      generate synthetic reads based on known circRNAs (in BED format)
 
@@ -15,6 +15,8 @@
 # change log (reverse chronological) #
 ######################################
 
+# 2016-04-04: fixed collapsing of all fragments from the same circRNA to the same start position /
+#             removed duplicates
 # 2016-03-29: switched to relative coordinates for splice junction annotation as requested by Marvin
 #             added merging of mate information as requested by Marvin
 # 2016-03-21: initial version (uncommented messy script with fixed parameters for EA_cel10T sample)
@@ -272,29 +274,22 @@ fragments<-circs %>%
                    )
 #                ,.parallel=T
                 ) %>%
-           (
-             function(fragments)
-               fragments %>%
-               names %>%
-               llply(function(fragment)
-                       fragment %>%
-                       fragments[[.]] %>%
-                       {
-                         setNames(.
-                                 ,names(.) %>%
-                                  paste(fragment
-                                       ,.
-                                       ,sep=sep.annotation
-                                       )
-                                 )
-                       }
-#                    ,.parallel=T
-                    ) %>%
-               unlist
-           ) %>%
+           {
+             setNames(.
+                     ,llply(.,names) %>%
+                      unlist %>%
+                      paste(names(.)
+                           ,.
+                           ,sep=sep.annotation
+                           )
+                     )
+           } %>%
+           llply(unname) %>%
+           unlist %>%
            llply(toString) %>% # This should not be necessary,
            unlist %>%          # but it is!
-           DNAStringSet
+           DNAStringSet %>%
+           unique
 
 
 
