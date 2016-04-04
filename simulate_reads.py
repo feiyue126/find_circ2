@@ -27,6 +27,7 @@ parser.add_option("-S","--system",dest="system",type=str,default="",help="model 
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--mutate",dest="mut_rate",type=float,default=0,help="per base mutation rate, between 0 and 1 (default=0)")
 parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
+parser.add_option("","--fpk",dest="fpk",action="store_true",default=False, help="if set, --n-frags is interpreted as frags-per-kilobase")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 parser.add_option("-o","--output",dest="output",default="simulation",help="path, where to store the output (default='./simulation')")
@@ -120,9 +121,16 @@ def mutate(seq, rate):
 
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
-    logger.info("simulating {0} fragments for {1}".format(options.n_frags, circ.name))
     L = circ.spliced_length
-    rnd_pos = np.random.randint(0, L, options.n_frags)
+    
+    if options.fpk:
+        n = int(options.n_frags * L / 1E3)
+    else:
+        n = options.n_frags
+
+    logger.info("simulating {0} fragments for {1}".format(n, circ.name))
+
+    rnd_pos = np.random.randint(0, L, n)
     for i,frag_start in enumerate(rnd_pos):
         
         m1_start, m1_end = frag_start, frag_start + options.read_len
