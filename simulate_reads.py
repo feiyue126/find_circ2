@@ -1,9 +1,22 @@
 #!/usr/bin/env python
+
+__version__ = "0.90"
+__author__ = "Marvin Jens"
+__credits__ = ["Marvin Jens","Marcel Schilling","Petar Glazar","Nikolaus Rajewsky"]
+__status__ = "beta"
+__licence__ = "GPL"
+__email__ = "marvin.jens@mdc-berlin.de"
+
 from byo.gene_model import transcripts_from_UCSC, CircRNA
 from byo import rev_comp
 import os,sys
 import optparse
 import numpy as np
+import logging
+from collections import defaultdict
+from gzip import GzipFile
+lin_counts = defaultdict(int)
+circ_counts = defaultdict(int)
 
 usage = """
    cat circ_models.ucsc | %prog [options] > interlaced_paired_end_reads.fa
@@ -15,7 +28,26 @@ parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path t
 parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
+parser.add_option("-o","--output",dest="output",default="simulation",help="path, where to store the output (default='./simulation')")
 options,args = parser.parse_args()
+
+if not (options.genome or options.system):
+    error("need to specify either model system database (-S) or genome FASTA file (-G).")
+    sys.exit(1)
+
+# prepare output files
+if not os.path.isdir(options.output):
+    os.mkdir(options.output)
+
+# prepare logging system
+FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
+logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(options.output,"run.log"),filemode='w')
+logger = logging.getLogger('simulate_reads.py')
+logger.info("simulate_reads.py {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
+
+circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
+lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
+reads_file = GzipFile(os.path.join(options.output,"simulated_reads.fa.gz"),"w")
 
 if options.system:
     import importlib
@@ -27,16 +59,21 @@ else:
     
     system = S()
     system.genome = load_track(options.genome)
-    
-def test_str(mate):
-    ori = mate.origin
-    #print "mate origin",mate.origin, mate.origin_spliced, mate.map_to_exon(mate.origin_spliced+1)
-    seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
-    #print mate.name, seg_bounds
 
-    last_s, last_e = seg_bounds[0]
+def store_splices(data, dst, prefix="sim"):
+    for i,(coord,count) in enumerate(sorted(data.items())):
+        chrom, start, end, strand = coord
+        name = "{0}_{1}".format(prefix,i)
+        out = [chrom, start, end, name, count, strand]
+        
+        dst.write('\t'.join([str(o) for o in out]) + '\n')
+    
+def test_str(mate, rec_lin = {}, rec_circ = {}):
+    ori = mate.origin
+    seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
 
     parts = []
+    last_s, last_e = seg_bounds[0]
     for i,(s,e) in enumerate(seg_bounds[::mate.dir]):
         if i == 0:
             # first segment: yield origin
@@ -44,9 +81,12 @@ def test_str(mate):
         elif s > last_s:
             # we move forward: linear splicing
             parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
+            rec_lin[ (mate.chrom, last_e, s, mate.sense) ] += 1
+
         elif s < last_s:
             # we move backward: circRNA backsplicing
             parts.append("CS:{start}:{end};M:{m}".format(start=s - ori, end=last_e - ori, m=e-s) )
+            rec_circ[ (mate.chrom, s, last_e, mate.sense) ] += 1
     
         last_s, last_e = s,e
 
@@ -54,9 +94,9 @@ def test_str(mate):
 
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
+    logger.info("simulating {0} fragments for {1}".format(options.n_frags, circ.name))
     L = circ.spliced_length
     rnd_pos = np.random.randint(0, L, options.n_frags)
-    #rnd_pos = [100,600,900]
     for i,frag_start in enumerate(rnd_pos):
         
         m1_start, m1_end = frag_start, frag_start + options.read_len
@@ -68,24 +108,6 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
         mate1 = circ.cut(m1_g_start, m1_g_end)
         mate2 = circ.cut(m2_g_start, m2_g_end)
         
-        #print "start_pos",frag_start
-        #print "circ"
-        #print circ
-        #print "rel. coordinates"
-        #print L
-        #print "m1:",m1_start,m1_end
-        #print "m2:",m2_start,m2_end
-        
-        #print "gen. coordinates"
-        #print "m1:",m1_g_start,m1_g_end
-        #print "m2:",m2_g_start,m2_g_end
-        
-        #print "resulting chains"
-        #print mate1
-        #print mate2
-        #print mate1.spliced_length
-        #print mate2.spliced_length
-        
         assert mate1.spliced_length == options.read_len
         assert mate2.spliced_length == options.read_len
         
@@ -93,8 +115,14 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
         mate1_seq = mate1.spliced_sequence
         mate2_seq = rev_comp(mate2.spliced_sequence)
         
-        m1_str = test_str(mate1)
-        m2_str = test_str(mate2)
+        m1_str = test_str(mate1, rec_lin = lin_counts, rec_circ = circ_counts)
+        m2_str = test_str(mate2, rec_lin = lin_counts, rec_circ = circ_counts)
 
         read_name = "sim_{circ.name}_{i}___{m1_str}|{m2_str}".format(**locals())
-        print ">{read_name}\n{mate1_seq}\n>{read_name}\n{mate2_seq}".format(**locals())
+        reads_file.write(">{read_name}\n{mate1_seq}\n>{read_name}\n{mate2_seq}\n".format(**locals()) )
+
+logger.info("storing {0} linear junction span counts".format(len(lin_counts)))
+store_splices(lin_counts, lins_file, "sim_lin")
+
+logger.info("storing {0} circular junction span counts".format(len(circ_counts)))
+store_splices(circ_counts, circs_file, "sim_circ")
