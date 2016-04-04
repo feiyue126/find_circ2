@@ -25,10 +25,13 @@ usage = """
 parser = optparse.OptionParser(usage=usage)
 parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
+parser.add_option("","--mutate",dest="mut_rate",type=float,default=0,help="per base mutation rate, between 0 and 1 (default=0)")
 parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 parser.add_option("-o","--output",dest="output",default="simulation",help="path, where to store the output (default='./simulation')")
+parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
+
 options,args = parser.parse_args()
 
 if not (options.genome or options.system):
@@ -48,6 +51,14 @@ logger.info("simulate_reads.py {0} invoked as '{1}'".format(__version__," ".join
 circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"simulated_reads.fa.gz"),"w")
+
+# redirect output to stdout, if requested
+if options.stdout:
+    varname = "{0}_file".format(options.stdout)
+    out_file = globals()[varname]
+    out_file.write('# redirected to stdout\n')
+    logger.info('redirected {0} to stdout'.format(options.stdout))
+    globals()[varname] = sys.stdout
 
 if options.system:
     import importlib
@@ -92,6 +103,21 @@ def test_str(mate, rec_lin = {}, rec_circ = {}):
 
     return ";".join(parts)
 
+def mutate(seq, rate):
+    other = {
+        'a' : ['C','G','T'],
+        'c' : ['A','G','T'],
+        'g' : ['A','C','T'],
+        't' : ['A','C','G'],
+    }
+    
+    seq = list(seq.lower())
+    p = np.random.rand(len(seq))
+    for i in (p < rate).nonzero()[0]:
+        seq[i] = other[seq[i]][np.random.randint(0,3)]
+    
+    return "".join(seq)
+
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
     logger.info("simulating {0} fragments for {1}".format(options.n_frags, circ.name))
@@ -115,6 +141,10 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
         mate1_seq = mate1.spliced_sequence
         mate2_seq = rev_comp(mate2.spliced_sequence)
         
+        if options.mut_rate:
+            mate1_seq = mutate(mate1_seq, options.mut_rate)
+            mate2_seq = mutate(mate2_seq, options.mut_rate)
+            
         m1_str = test_str(mate1, rec_lin = lin_counts, rec_circ = circ_counts)
         m2_str = test_str(mate2, rec_lin = lin_counts, rec_circ = circ_counts)
 
