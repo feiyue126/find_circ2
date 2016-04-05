@@ -55,6 +55,8 @@ circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"simulated_reads.fa.gz"),"w")
 
+circ_junction_names = {}
+
 # redirect output to stdout, if requested
 if options.stdout:
     varname = "{0}_file".format(options.stdout)
@@ -78,39 +80,61 @@ else:
 def store_splices(data, dst, prefix="sim"):
     for i,(coord,(n_weight, n_frags, n_span)) in enumerate(sorted(data.items())):
         chrom, start, end, strand = coord
-        name = "{0}_{1}".format(prefix,i)
+        # get circ-name if this a circ junction, or generate generic name
+        name = circ_junction_names.get(coord, "{0}_{1}".format(prefix,i))
         out = [chrom, start, end, name, n_frags, strand, n_span, n_weight]
         
         dst.write('\t'.join([str(o) for o in out]) + '\n')
     
-def test_str(mate, rec_lin = {}, rec_circ = {}):
-    ori = mate.origin
-    seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
-
+def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
     splices = 0
     lin_juncs = defaultdict(int)
     circ_juncs = defaultdict(int)
     
+    #if mate.sense == '+':
+        #seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
+        #ori = mate.origin
+    #else:
+        #ori = mate.map_from_spliced(0)
+        #seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(0), axis=0)
+        
+    #print seg_bounds
     parts = []
-    last_s, last_e = seg_bounds[0]
-    for i,(s,e) in enumerate(seg_bounds[::mate.dir]):
+
+    #print "mate",mate
+    last_s, last_e = mate.start, mate.end
+    ori = mate.start
+    # always represent in + orientation of the chromosome!
+    for i,(s,e) in enumerate(mate.exon_bounds):
+        #print s,e
+        #print circ.start, circ.end
         if i == 0:
             # first segment: yield origin
-            parts.append("O:{chrom}:{ori}:{sense};M:{m}".format(chrom=mate.chrom, ori=mate.origin, sense=mate.sense, m=e-s) )
-        elif s > last_s:
-            # we move forward: linear splicing
-            parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
-            lin_juncs[ (mate.chrom, last_e, s, mate.sense) ] += 1
-            splices +=1 
-
-        elif s < last_s:
-            # we move backward: circRNA backsplicing
-            parts.append("CS:{start}:{end};M:{m}".format(start=s - ori, end=last_e - ori, m=e-s) )
-            circ_juncs[ (mate.chrom, s, last_e, mate.sense) ] += 1
-            splices += 1
-    
+            parts.append("O:{chrom}:{ori}:{sense};M:{m}".format(chrom=mate.chrom, ori=ori, sense=mate.sense, m=e-s) )
+        else:
+            # we must have gotten here by splicing
+            if s == circ.start or e == circ.end:
+                # these are circRNA bounds, not linked by linear splicing: skip for now!
+                pass
+            else:
+                parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
+                lin_juncs[ (mate.chrom, last_e, s, mate.sense) ] += 1
+                splices +=1 
+   
         last_s, last_e = s,e
 
+    if mate.start == circ.start and mate.end == circ.end:
+        parts.append("CS:{start}:{end};M:{m}".format(start=circ.start - ori, end=circ.end - ori, m=e-s) )
+        circ_juncs[ (mate.chrom, circ.start, circ.end, mate.sense) ] += 1
+        splices += 1
+
+
+            #if circ:
+                #if circ.start != s or circ.end != last_e:
+                    #logger.error('falsely flagged backsplice circ="{0}" mate="{1}" parts="{2}'.format(circ,mate,parts))
+    
+        last_s, last_e = s,e
+        #print parts
 
     if splices > 1:
         w = 1./(splices-1)
@@ -141,7 +165,11 @@ def mutate(seq, rate):
 
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
+    # keep circ name by junction coordinate for later, when we write reads and need the names!
+    circ_junction_names[ (circ.chrom, circ.start, circ.end, circ.sense) ] = circ.name
+
     L = circ.spliced_length
+    #print circ.name, L
     
     if options.fpk:
         n = int(options.n_frags * L / 1E3)
@@ -151,17 +179,24 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
     logger.info("simulating {0} fragments for {1}".format(n, circ.name))
 
     rnd_pos = np.random.randint(0, L, n)
+    #rnd_pos = [0,100,200,400]
     for i,frag_start in enumerate(rnd_pos):
-        
+        #frag_start = circ.map_to_spliced(16323340)
+        #print ">>> frag_start",frag_start
         m1_start, m1_end = frag_start, frag_start + options.read_len
         m2_start, m2_end = frag_start + options.frag_len - options.read_len, frag_start + options.frag_len
         
         m1_g_start, m1_g_end = circ.map_from_spliced(m1_start), circ.map_from_spliced(m1_end)
         m2_g_start, m2_g_end = circ.map_from_spliced(m2_start), circ.map_from_spliced(m2_end)
         
+        #print circ.name, L
+        #print "M1", m1_start, m1_end, m1_g_start, m1_g_end
         mate1 = circ.cut(m1_g_start, m1_g_end)
+        #print "M2", m2_start, m2_end, m2_g_start, m2_g_end
         mate2 = circ.cut(m2_g_start, m2_g_end)
         
+        #print mate1
+        #print mate2
         assert mate1.spliced_length == options.read_len
         assert mate2.spliced_length == options.read_len
         
@@ -173,14 +208,14 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
             mate1_seq = mutate(mate1_seq, options.mut_rate)
             mate2_seq = mutate(mate2_seq, options.mut_rate)
             
-        m1_str = test_str(mate1, rec_lin = lin_counts, rec_circ = circ_counts)
-        m2_str = test_str(mate2, rec_lin = lin_counts, rec_circ = circ_counts)
+        m1_str = test_str(mate1, rec_lin = lin_counts, rec_circ = circ_counts, circ=circ)
+        m2_str = test_str(mate2, rec_lin = lin_counts, rec_circ = circ_counts, circ=circ)
 
-        read_name = "sim_{circ.name}_{i}___{m1_str}|{m2_str}".format(**locals())
+        read_name = "{circ.name}_sim_{i}___{m1_str}|{m2_str}".format(**locals())
         reads_file.write(">{read_name}\n{mate1_seq}\n>{read_name}\n{mate2_seq}\n".format(**locals()) )
 
 logger.info("storing {0} linear junction span counts".format(len(lin_counts)))
-store_splices(lin_counts, lins_file, "sim_lin")
+store_splices(lin_counts, lins_file, "lin_sim")
 
 logger.info("storing {0} circular junction span counts".format(len(circ_counts)))
-store_splices(circ_counts, circs_file, "sim_circ")
+store_splices(circ_counts, circs_file, "circ_sim")
