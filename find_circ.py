@@ -487,13 +487,16 @@ minmapscore = options.asize * (-2)
 class Hit(object):
     def __init__(self,name,splice):
         self.name = name
+
         self.reads = []
-        self.counts = 0.
         self.readnames = []
         self.uniq = set()
         self.mapquals_A = []
         self.mapquals_B = []
-        self.uniq_bridges = 0.
+
+        self.n_weighted = 0.
+        self.n_spanned = 0
+        self.n_uniq_bridges = 0.
         self.edits = []
         self.overlaps = []
         self.n_hits = []
@@ -522,7 +525,7 @@ class Hit(object):
         return flags,counts
         
     def add(self,splice):
-        #print self.name,self.coord,splice.junc_span,self.counts
+        #print self.name,self.coord,splice.junc_span,self.weighted_counts
         self.signal = splice.gtag
         
         # TODO: this belongs to output, not here!
@@ -538,11 +541,13 @@ class Hit(object):
         self.n_hits.append(splice.n_hits)
         
         if splice.junc_span:
-            self.counts += splice.junc_span.weight
+            self.n_spanned += 1
+            self.n_weighted += splice.junc_span.weight
             # TODO: Move this logic into JunctionSpan, bc it is closer to the underlying alignments
             # by convention have A precede B in the genome.
             A = splice.junc_span.align_A
             B = splice.junc_span.align_B
+            
             read = splice.junc_span.primary.seq
             weight = splice.junc_span.weight
             if splice.is_backsplice:
@@ -556,19 +561,12 @@ class Hit(object):
 
             if qA and qB:
                 # both anchors from the *same read* align uniquely
-                self.uniq_bridges += weight
+                self.n_uniq_bridges += weight
 
             self.mapquals_A.append(qA)
             self.mapquals_B.append(qB)
 
-            # recover the original readname 
-            # ('__' is forbidden in input read names!)
-            if '__' in A.qname:
-                qname = A.qname.split('__')[0][:-2]
-            else: # reads have been swapped at some point
-                qname = B.qname.split('__')[0][:-2]
-
-            self.readnames.append(qname)
+            self.readnames.append(splice.junc_span.primary.qname)
             
             # record the spliced read sequence as it was before mapping
             if A.is_reverse:
@@ -583,30 +581,35 @@ class Hit(object):
             
             self.uniq.add((read,sample_name))
             self.uniq.add((rev_comp(read),sample_name))
-        
-    def scores(self):
-        #print self.name,self.coord,self.mapquals_A
-        n_spanned = len(self.reads)
-        n_uniq = len(self.uniq) / 2
-        #print sorted(self.mapquals_A,reverse=True)
-        #print sorted(self.mapquals_B,reverse=True)
-        self.best_qual_A = sorted(self.mapquals_A,reverse=True)[0]
-        self.best_qual_B = sorted(self.mapquals_B,reverse=True)[0]
 
-        #print self.edits,self.overlaps,self.n_hits
+    @property
+    def n_frags(self):
+        return len(set(self.readnames))
+    
+    @property
+    def n_uniq(self):
+        return len(self.uniq) / 2 # forward and rev_comp sequences
+    
+    def get_best_anchor_quals(self):
+        return sorted(self.mapquals_A,reverse=True)[0], sorted(self.mapquals_B,reverse=True)[0]
+
+    def get_tissue_names_counts(self):
         tissues = sorted(self.tissues.keys())
         tiss_counts = [str(self.tissues[k]) for k in tissues]
-        return (n_spanned,self.counts,n_uniq,self.best_qual_A,self.best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
+        
+        return tissues, tiss_counts
 
+    @property
     def categories(self):
         categories = []
         if self.signal != "GTAG":
             categories.append("NON_CANONICAL")
         #if strandmatch == "MATCH":
             #categories.append("STRANDMATCH")
-        if self.best_qual_A == 0 or self.best_qual_B == 0:
+        best_qual_A, best_qual_B = self.get_best_anchor_quals()
+        if best_qual_A == 0 or best_qual_B == 0:
             categories.append("WARN_NON_UNIQUE_ANCHOR")
-        if self.uniq_bridges == 0:
+        if self.n_uniq_bridges == 0:
             categories.append("WARN_NO_UNIQ_BRIDGES")          
         if min(self.n_hits) > 1:
             categories.append("WARN_AMBIGUOUS_BP")
@@ -651,6 +654,7 @@ class Hit(object):
 
         return categories
 
+
 class SpliceSiteStorage(object):
     def __init__(self, prefix, known):
         self.prefix = prefix
@@ -690,13 +694,16 @@ class SpliceSiteStorage(object):
         return self.sites[coord]
 
     def store_list(self,output):
-        output.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category','flags','flag_counts']) + "\n")
+        output.write("#" + "\t".join(['chrom','start','end','name','n_frags','strand','n_weight','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category','flags','flag_counts']) + "\n")
 
         for (chrom,start,end,sense),hit in self.sites.items():
-            if hit.counts == 0.:
+            if not hit.reads:
                 continue # a known splice site that was not recovered here
-            n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores()
-
+            #n_spanned,n_weight,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores()
+            #n_spanned,self.weighted_counts,n_uniq,self.best_qual_A,self.best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch
+            
+            best_qual_A, best_qual_B = hit.get_best_anchor_quals()
+            
             if options.halfunique:
                 if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
                     N['anchor_not_uniq'] += 1
@@ -706,19 +713,20 @@ class SpliceSiteStorage(object):
                     N['anchor_not_uniq'] += 1
                     continue
 
-            if (uniq_bridges == 0) and not options.report_nobridges:
+            if (hit.n_uniq_bridges == 0) and not options.report_nobridges:
                     N['no_uniq_bridges'] += 1
                     continue
                     
-            categories = hit.categories()
-            flags,flag_counts = hit.get_flags_counts()
-            
+            tissues, tiss_counts = hit.get_tissue_names_counts()
+            flags, flag_counts = hit.get_flags_counts()
+
             bed = [
-                chrom,start,end,hit.name,counts,sense, # BED6 compatible
-                n_spanned,n_uniq,uniq_bridges,best_qual_A,best_qual_B, # mapping reliability
-                ",".join(tissues),",".join(tiss_counts), # sample association
-                min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories) ), # splice site detection reliability
-                ",".join(flags),",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
+                chrom, start, end, hit.name, hit.n_frags, sense, # BED6 compatible
+                hit.n_weighted, hit.n_spanned, hit.n_uniq, hit.n_uniq_bridges, # read counts
+                best_qual_A, best_qual_B, # mapping reliability
+                ",".join(tissues), ",".join(tiss_counts), # sample association
+                min(hit.edits), min(hit.overlaps), min(hit.n_hits), hit.signal, hit.strandmatch, ",".join(sorted(hit.categories) ), # splice site detection reliability
+                ",".join(flags), ",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
             ]
             output.write("\t".join([str(b) for b in bed]) + "\n")
 
