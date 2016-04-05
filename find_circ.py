@@ -431,7 +431,7 @@ if not (options.genome or options.system):
 
 # prepare output files
 if not os.path.isdir(options.output):
-    os.mkdir(options.output)
+    os.makedirs(options.output)
 
 # prepare logging system
 FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
