@@ -15,8 +15,10 @@ import numpy as np
 import logging
 from collections import defaultdict
 from gzip import GzipFile
-lin_counts = defaultdict(int)
-circ_counts = defaultdict(int)
+
+# store the number of [n_weighted, n_frag, n_span]
+lin_counts = defaultdict( lambda : np.zeros(3) )
+circ_counts = defaultdict( lambda : np.zeros(3) )
 
 usage = """
    cat circ_models.ucsc | %prog [options] > interlaced_paired_end_reads.fa
@@ -41,7 +43,7 @@ if not (options.genome or options.system):
 
 # prepare output files
 if not os.path.isdir(options.output):
-    os.mkdir(options.output)
+    os.makedirs(options.output)
 
 # prepare logging system
 FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
@@ -72,11 +74,12 @@ else:
     system = S()
     system.genome = load_track(options.genome)
 
+
 def store_splices(data, dst, prefix="sim"):
-    for i,(coord,count) in enumerate(sorted(data.items())):
+    for i,(coord,(n_weight, n_frags, n_span)) in enumerate(sorted(data.items())):
         chrom, start, end, strand = coord
         name = "{0}_{1}".format(prefix,i)
-        out = [chrom, start, end, name, count, strand]
+        out = [chrom, start, end, name, n_frags, strand, n_span, n_weight]
         
         dst.write('\t'.join([str(o) for o in out]) + '\n')
     
@@ -84,6 +87,10 @@ def test_str(mate, rec_lin = {}, rec_circ = {}):
     ori = mate.origin
     seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
 
+    splices = 0
+    lin_juncs = defaultdict(int)
+    circ_juncs = defaultdict(int)
+    
     parts = []
     last_s, last_e = seg_bounds[0]
     for i,(s,e) in enumerate(seg_bounds[::mate.dir]):
@@ -93,15 +100,28 @@ def test_str(mate, rec_lin = {}, rec_circ = {}):
         elif s > last_s:
             # we move forward: linear splicing
             parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
-            rec_lin[ (mate.chrom, last_e, s, mate.sense) ] += 1
+            lin_juncs[ (mate.chrom, last_e, s, mate.sense) ] += 1
+            splices +=1 
 
         elif s < last_s:
             # we move backward: circRNA backsplicing
             parts.append("CS:{start}:{end};M:{m}".format(start=s - ori, end=last_e - ori, m=e-s) )
-            rec_circ[ (mate.chrom, s, last_e, mate.sense) ] += 1
+            circ_juncs[ (mate.chrom, s, last_e, mate.sense) ] += 1
+            splices += 1
     
         last_s, last_e = s,e
 
+
+    if splices > 1:
+        w = 1./(splices-1)
+    else:
+        w = 1
+        
+    for coord in lin_juncs:
+        rec_lin[coord] += np.array([w, 1, lin_juncs[coord]])
+    for coord in circ_juncs:
+        rec_circ[coord] += np.array([w, 1, circ_juncs[coord]])
+    
     return ";".join(parts)
 
 def mutate(seq, rate):
