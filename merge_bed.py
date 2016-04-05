@@ -16,6 +16,7 @@ parser = OptionParser(usage=usage)
 parser.add_option("-f","--flank",dest="flank",type=int,default=0,help="add flanking nucleotides to define more fuzzy overlap (default=0)")
 parser.add_option("-s","--stats",dest="stats",default="",help="write statistics to this file (instead of stderr)")
 parser.add_option("-6","--bed6",dest="bed6",default=False,action="store_true",help="ignore all columns except the first six standard BED columns (default=False)")
+parser.add_option("","--score",dest="score",default=False,action="store_true",help="ignore all columns except the first six standard BED columns and only retain score column from 2nd, 3rd ... BED (default=False)")
 parser.add_option("-F","--format",dest="format",default="2",choices = ["1","1.2","2"],help="select the find_circ.py outout version (choices=['1','1.2','2'])")
 parser.add_option("-V","--verbatim",dest="verbatim",default=False,action="store_true",help="do not attempt to merge all columns. Simply join on coordinates, other columns reported in verbatim")
 
@@ -151,6 +152,19 @@ if options.verbatim:
 
         print "\t".join(cols)
        
+elif options.score:
+    for pos in merge.keys():
+        com = support[pos]
+        comstr = "(%s)" % ",".join(com)
+        cols = [comstr]
+        for name in shorts:
+            if not name in com:
+                cols.append("0")
+            else:
+                cols.append(by_name[name][pos][4])
+
+        print "\t".join(cols)
+    
 else:
     for pos in merge.keys():
         com = support[pos]
@@ -159,36 +173,3 @@ else:
         cols = [comstr] + consensus_cols(lines,comb)
 
         print "\t".join(cols)
-
-
-#for names,inputs in zip(combinations(names
-
-
-#for circ,line in marv.items():
-    #if circ in anna:
-        #if len(sys.argv) > 3:
-            #print "%s\t%s" % (anna[circ].split('\t')[3],line.split('\t')[3])
-        #else:
-            #print anna[circ]
-        ##print "M",line
-        #N['overlap'] += 1        
-        #del anna[circ]
-    #else:
-        #N['input2_not_in_input1'] += 1
-    ##print len(anna.keys())
-        
-#for k,l in anna.items():
-    ##if "HEK" in l:
-        #print "MISSING\t%s" % l
-        #N['input1_not_in_input2'] += 1
-
-#for k in sorted(N.keys()):
-    #sys.stderr.write("%s\t%d\n" % (k,N[k]))
-        
-#found = N['overlap']
-#detected = N['unique_input2']
-#total = N['unique_input1']
-#fp = N['input2_not_in_input1']
-
-#print "#sensitivity %d/%d = %.2f %%" % (found,total,float(found)/total*100)
-#print "#FDR %d/%d = %.2f %%" % (fp,detected,float(fp)/detected*100)
