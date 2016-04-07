@@ -16,9 +16,9 @@ import logging
 from collections import defaultdict
 from gzip import GzipFile
 
-# store the number of [n_weighted, n_frag, n_span]
-lin_counts = defaultdict( lambda : np.zeros(3) )
-circ_counts = defaultdict( lambda : np.zeros(3) )
+# store the number of [n_weighted, n_frag, n_span, min_span]
+lin_counts = defaultdict( lambda : np.zeros(4) )
+circ_counts = defaultdict( lambda : np.zeros(4) )
 
 usage = """
    cat circ_models.ucsc | %prog [options] > interlaced_paired_end_reads.fa
@@ -28,6 +28,7 @@ parser = optparse.OptionParser(usage=usage)
 parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--mutate",dest="mut_rate",type=float,default=0,help="per base mutation rate, between 0 and 1 (default=0)")
+parser.add_option("","--min-segment",dest="min_seg",type=int,default=13,help="minimum size of span to be detectable/~BWA MEM min. segment size (default=13)")
 parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--fpk",dest="fpk",action="store_true",default=False, help="if set, --n-frags is interpreted as frags-per-kilobase")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
@@ -55,6 +56,9 @@ circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"simulated_reads.fa.gz"),"w")
 
+## ugly global variables to hold differnt parts together
+# the name dictionary allows the BED-file writer in the 
+# end to use the correct name for each junction
 circ_junction_names = {}
 
 # redirect output to stdout, if requested
@@ -78,11 +82,12 @@ else:
 
 
 def store_splices(data, dst, prefix="sim"):
-    for i,(coord,(n_weight, n_frags, n_span)) in enumerate(sorted(data.items())):
+    dst.write('\t'.join(["#chrom","start","end","name","n_detectable","strand","n_span","n_weight","n_frags"]) + '\n')
+    for i,(coord,(n_weight, n_frags, n_span, n_detect)) in enumerate(sorted(data.items())):
         chrom, start, end, strand = coord
         # get circ-name if this a circ junction, or generate generic name
         name = circ_junction_names.get(coord, "{0}_{1}".format(prefix,i))
-        out = [chrom, start, end, name, n_frags, strand, n_span, n_weight]
+        out = [chrom, start, end, name, n_detect, strand, n_span, n_weight, n_frags]
         
         dst.write('\t'.join([str(o) for o in out]) + '\n')
     
@@ -90,18 +95,10 @@ def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
     splices = 0
     lin_juncs = defaultdict(int)
     circ_juncs = defaultdict(int)
-    
-    #if mate.sense == '+':
-        #seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(mate.origin_spliced+1), axis=0)
-        #ori = mate.origin
-    #else:
-        #ori = mate.map_from_spliced(0)
-        #seg_bounds = np.roll(mate.exon_bounds, -mate.map_to_exon(0), axis=0)
-        
-    #print seg_bounds
+    lin_detectable = defaultdict(int)
     parts = []
+    lin_span = defaultdict(int)
 
-    #print "mate",mate
     last_s, last_e = mate.start, mate.end
     ori = mate.start
     # always represent in + orientation of the chromosome!
@@ -118,7 +115,18 @@ def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
                 pass
             else:
                 parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
-                lin_juncs[ (mate.chrom, last_e, s, mate.sense) ] += 1
+                coord = (mate.chrom, last_e, s, mate.sense)
+                lin_juncs[ coord ] += 1
+
+                left, right = mate.exon_lengths[i-1:i+1]
+                
+                # record the number of nucleotides that span the junction
+                span = min(left, right)
+                lin_span[coord] = max(lin_span[coord], span)
+                
+                if span >= options.min_seg:
+                    lin_detectable[coord] += 1
+                    
                 splices +=1 
    
         last_s, last_e = s,e
@@ -127,24 +135,23 @@ def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
         parts.append("CS:{start}:{end};M:{m}".format(start=circ.start - ori, end=circ.end - ori, m=e-s) )
         circ_juncs[ (mate.chrom, circ.start, circ.end, mate.sense) ] += 1
         splices += 1
-
-
-            #if circ:
-                #if circ.start != s or circ.end != last_e:
-                    #logger.error('falsely flagged backsplice circ="{0}" mate="{1}" parts="{2}'.format(circ,mate,parts))
     
-        last_s, last_e = s,e
-        #print parts
-
     if splices > 1:
         w = 1./(splices-1)
     else:
         w = 1
         
+    # store the counts
     for coord in lin_juncs:
-        rec_lin[coord] += np.array([w, 1, lin_juncs[coord]])
+        rec_lin[coord] += np.array([w, 1, lin_juncs[coord], lin_detectable[coord]])
+
     for coord in circ_juncs:
-        rec_circ[coord] += np.array([w, 1, circ_juncs[coord]])
+        span = min(mate.exon_lengths[0], mate.exon_lengths[-1])
+        if span >= options.min_seg:
+            detectable = 1
+        else:
+            detectable = 0
+        rec_circ[coord] += np.array([w, 1, circ_juncs[coord], detectable])
     
     return ";".join(parts)
 
