@@ -47,6 +47,9 @@ logger.info("reconstruct_isoforms.py {0} invoked as '{1}'".format(__version__," 
 
 
 class ExonStorage(object):
+    """
+    Fast lookup of exons that are inbetween two coordinates
+    """
     def __init__(self):
         self.sorted_exon_bounds = defaultdict(list)
         self.exons_by_coord = defaultdict( lambda : defaultdict(list) )
@@ -95,6 +98,57 @@ known_exons = ExonStorage()
 if options.known_exons:
     known_exons.load_gtf(options.known_exons)
 
+class SupportedCircRNA(CircRNA):
+    def __init__(self, name, chrom, sense, exon_starts, exon_ends, min_exon_overlap=.85, **kwargs):
+        super(CircRNA,self).__init__(name, chrom, sense, exon_starts, exon_ends, (exon_starts[0],exon_starts[0]), **kwargs)
+        
+        self.min_exon_overlap = min_exon_overlap
+        self.exonic_map = {}
+        self.exonic_support = defaultdict(int)
+        
+        self.junctions = set([ (left, right) for left, right in self.intron_bounds])
+        self.junction_support = defaultdict(int)
+        
+        for i,(start,end) in enumerate(self.exon_bounds):
+            for x in xrange(start,end):
+                self.exonic_map[x] = i
+
+    def splice_support(self,start,end):
+        if not (start,end) in self.junctions:
+            return False
+        
+        self.junction_support[(start, end)] += 1
+        self.exonic_support[self.exonic_map[start-1]] += 1
+        self.exonic_support[self.exonic_map[end]] += 1
+        
+        return True
+
+    def exon_support(self,start,end):
+        intersect = self.cut(start,end)
+        
+        if intersect.spliced_length < (end-start) * self.min_exon_overlap:
+            return False
+        
+        for x in xrange(start,end):
+            if x in self.exonic_map:
+                self.exonic_support[self.exonic_map[x]] += 1
+                break
+
+        return True
+
+    @property
+    def support_summary(self):
+        print self.junction_support
+        print self.exonic_support
+        print self.exon_count
+        supported_junctions = len(self.junction_support.keys())
+        junc_fraction = supported_junctions / float(len(self.junctions))
+        
+        supported_exons = len(self.exonic_support.keys())
+        exon_fraction = supported_exons / float(self.exon_count)
+
+        return "junc_fraction={0} exon_fraction={1}".format(junc_fraction, exon_fraction)
+    
 class ReconstructedCircIsoforms(object):
     def __init__(self, multi_event_source):
         self.multi_events = defaultdict(list)
@@ -140,9 +194,26 @@ class ReconstructedCircIsoforms(object):
         
         first = self.multi_events[circname][0]
         chrom, start, end, sense = first.chrom, first.start, first.end, first.sense
-        candidate_exons = known_exons.get_intervening_exons(chrom, start, end, sense)
         
-        print circname, candidate_exons
+        known_bounds = np.array(known_exons.get_intervening_exons(chrom, start, end, sense))
+        known_starts, known_ends = known_bounds.transpose()
+        
+        isoforms = [SupportedCircRNA("{0}_known".format(circname),chrom, sense, known_starts, known_ends)]
+
+        for me in self.multi_events[circname]:
+            for start, end in me.linear:
+                supported = np.array([I.splice_support(start,end) for I in isoforms])
+                if not supported.any():
+                    print "need new splice junction or drop an intervening exon!"
+
+            for start, end in me.unspliced:
+                supported = np.array([I.exon_support(start,end) for I in isoforms])
+                if not supported.any():
+                    print "Need new exon or retained intron"
+                    
+        return isoforms
+ 
+
 
     def __iter__(self):
         for name in sorted(self.multi_events.keys()):
@@ -150,6 +221,7 @@ class ReconstructedCircIsoforms(object):
                 continue
             yield self.reconstruct(name)
 
-for rec in ReconstructedCircIsoforms(file(args[0])):
-    print rec
+for isoform_set in ReconstructedCircIsoforms(file(args[0])):
+    for iso in isoform_set:
+        print iso.support_summary
 
