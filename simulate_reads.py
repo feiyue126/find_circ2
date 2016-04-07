@@ -38,11 +38,7 @@ parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lin
 
 options,args = parser.parse_args()
 
-if not (options.genome or options.system):
-    error("need to specify either model system database (-S) or genome FASTA file (-G).")
-    sys.exit(1)
-
-# prepare output files
+# prepare output directory
 if not os.path.isdir(options.output):
     os.makedirs(options.output)
 
@@ -52,6 +48,11 @@ logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(optio
 logger = logging.getLogger('simulate_reads.py')
 logger.info("simulate_reads.py {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
 
+if not (options.genome or options.system):
+    print "need to specify either model system database (-S) or genome FASTA file (-G)."
+    sys.exit(1)
+
+# prepare output files
 circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"simulated_reads.fa.gz"),"w")
@@ -176,6 +177,10 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
     circ_junction_names[ (circ.chrom, circ.start, circ.end, circ.sense) ] = circ.name
 
     L = circ.spliced_length
+    if L < options.read_len:
+        logger.warning("skipping {0} because it is shorter than read length, which is currently not supported".format(circ.name))
+        continue
+
     #print circ.name, L
     
     if options.fpk:

@@ -417,19 +417,7 @@ if options.version:
     print """find_circ.py version {0}\n\n(c) Marvin Jens 2012-2016.\nCheck http://www.circbase.org for more information.""".format(__version__)
     sys.exit(0)
 
-if options.system:
-    import importlib
-    system = importlib.import_module("byo.systems.{options.system}".format(**locals()))
-    genome = system.genome
-
-if options.genome:
-    genome = Track(options.genome,accessor=GenomeAccessor)
-    
-if not (options.genome or options.system):
-    error("need to specify either model system database (-S) or genome FASTA file (-G).")
-    sys.exit(1)
-
-# prepare output files
+# prepare output directory
 if not os.path.isdir(options.output):
     os.makedirs(options.output)
 
@@ -439,6 +427,19 @@ logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(optio
 logger = logging.getLogger('find_circ')
 logger.info("find_circ {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
 
+if options.system:
+    import importlib
+    system = importlib.import_module("byo.systems.{options.system}".format(**locals()))
+    genome = system.genome
+
+if options.genome:
+    genome = Track(options.genome,accessor=GenomeAccessor)
+    
+if not (options.genome or options.system):
+    print "need to specify either model system database (-S) or genome FASTA file (-G)."
+    sys.exit(1)
+
+# prepare output files
 circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = GzipFile(os.path.join(options.output,"spliced_reads.fastq.gz"),"w")
