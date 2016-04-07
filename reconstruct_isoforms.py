@@ -41,7 +41,8 @@ if not os.path.isdir(options.output):
 
 # prepare logging system
 FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
-logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(options.output,"run.log"),filemode='w')
+#logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(options.output,"run.log"),filemode='w')
+logging.basicConfig(level=logging.DEBUG,format=FORMAT)#,filename=os.path.join(options.output,"run.log"),filemode='w')
 logger = logging.getLogger('reconstruct_isoforms.py')
 logger.info("reconstruct_isoforms.py {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
 
@@ -104,37 +105,86 @@ class SupportedCircRNA(CircRNA):
         
         self.min_exon_overlap = min_exon_overlap
         self.exonic_map = {}
-        self.exonic_support = defaultdict(int)
-        
-        self.junctions = set([ (left, right) for left, right in self.intron_bounds])
-        self.junction_support = defaultdict(int)
+        self.junctions = set([ (min(left, right), max(left, right)) for left, right in self.intron_bounds])
+        self.reset_counts()
         
         for i,(start,end) in enumerate(self.exon_bounds):
             for x in xrange(start,end):
                 self.exonic_map[x] = i
 
-    def splice_support(self,start,end):
+    def reset_counts(self):
+        self.exonic_support = defaultdict(int)
+        self.junction_support = defaultdict(int)
+        
+    def splice_support(self,start,end, count=True):
         if not (start,end) in self.junctions:
             return False
         
-        self.junction_support[(start, end)] += 1
-        self.exonic_support[self.exonic_map[start-1]] += 1
-        self.exonic_support[self.exonic_map[end]] += 1
+        if count:
+            self.junction_support[(start, end)] += 1
+            self.exonic_support[self.exonic_map[start-1]] += 1
+            self.exonic_support[self.exonic_map[end]] += 1
         
         return True
 
-    def exon_support(self,start,end):
+    def exon_support(self,start,end, count=True):
         intersect = self.cut(start,end)
         
         if intersect.spliced_length < (end-start) * self.min_exon_overlap:
             return False
         
-        for x in xrange(start,end):
-            if x in self.exonic_map:
-                self.exonic_support[self.exonic_map[x]] += 1
-                break
+        if count:
+            for x in xrange(start,end):
+                if x in self.exonic_map:
+                    self.exonic_support[self.exonic_map[x]] += 1
+                    break
 
         return True
+
+    def insert_new_intron(self, left, right):
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+        
+        start_i = bisect.bisect_left(new_exon_starts, right)
+        end_i = bisect.bisect_left(new_exon_ends, left)
+        new_exon_starts.insert(start_i, right)
+        new_exon_ends.insert(end_i, left)
+        
+        return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+        
+    def adjust_exon_start(self, left, right):
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+        
+        # find exon by end coordinate
+        i = new_exon_ends.index(left)
+        new_exon_starts[i] = right
+        
+        return SupportedCircRNA("{0}_adj_start_{1}:{2}".format(self.name, i, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+
+    def adjust_exon_end(self, left, right):
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+        
+        # find exon by start coordinate
+        i = new_exon_starts.index(right)
+        new_exon_ends[i] = left
+        
+        return SupportedCircRNA("{0}_adj_end_{1}:{2}".format(self.name, i, left), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+
+    def skip_exons_between(self, left, right):
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+
+        # find bounding exon indices by coordinates
+        i = new_exon_ends.index(left)
+        j = new_exon_starts.index(right)
+        
+        new_exon_ends = new_exon_ends[:i+1] + new_exon_ends[j:]
+        new_exon_starts = new_exon_starts[:i+1] + new_exon_starts[j:]
+        
+        return SupportedCircRNA("{0}_skipped_{1}-{2}".format(self.name, i, j), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+
 
     @property
     def support_summary(self):
@@ -142,16 +192,22 @@ class SupportedCircRNA(CircRNA):
         print self.exonic_support
         print self.exon_count
         supported_junctions = len(self.junction_support.keys())
-        junc_fraction = supported_junctions / float(len(self.junctions))
+        if self.junctions:
+            junc_fraction = supported_junctions / float(len(self.junctions))
+        else:
+            junc_fraction = "n/a"
         
         supported_exons = len(self.exonic_support.keys())
         exon_fraction = supported_exons / float(self.exon_count)
 
         return "junc_fraction={0} exon_fraction={1}".format(junc_fraction, exon_fraction)
-    
+
+
+
 class ReconstructedCircIsoforms(object):
     def __init__(self, multi_event_source):
         self.multi_events = defaultdict(list)
+        self.logger = logging.getLogger("ReconstructedCircIsoforms")
 
         class MultiEvent(object):
             pass
@@ -187,7 +243,8 @@ class ReconstructedCircIsoforms(object):
             me.unspliced = set(to_coords(parts[9]))
 
             self.multi_events[me.name].append(me)
-        
+
+
     def reconstruct(self,circname):
         if not circname in self.multi_events:
             return []
@@ -195,16 +252,70 @@ class ReconstructedCircIsoforms(object):
         first = self.multi_events[circname][0]
         chrom, start, end, sense = first.chrom, first.start, first.end, first.sense
         
-        known_bounds = np.array(known_exons.get_intervening_exons(chrom, start, end, sense))
-        known_starts, known_ends = known_bounds.transpose()
-        
-        isoforms = [SupportedCircRNA("{0}_known".format(circname),chrom, sense, known_starts, known_ends)]
+        current_exons_by_bound = defaultdict(list)
 
+        known_bounds = np.array(known_exons.get_intervening_exons(chrom, start, end, sense))
+        if len(known_bounds):
+            for start, end in known_bounds:
+                current_exons_by_bound[start].append( (start, end) )
+                current_exons_by_bound[end].append( (start, end) )
+
+            starts, ends = known_bounds.transpose()
+            isoforms = [SupportedCircRNA("{0}_known".format(circname),chrom, sense, starts, ends)]
+            self.logger.info("starting reconstruction of {circname} from {n} known exons".format(circname=circname, n=len(known_bounds) ))
+        else:
+            # no known exons in this region? 
+            # Assume single exon circRNA
+            starts = [first.start]
+            ends = [first.end]
+            current_exons_by_bound[first.start].append( (first.start, first.end) )
+            current_exons_by_bound[first.end].append( (first.start, first.end) )
+            
+            isoforms = [SupportedCircRNA("{0}_denovo".format(circname),chrom, sense, starts, ends)]
+            self.logger.info("starting reconstruction of {circname} de novo".format(circname=circname) )
+
+
+        # TODO: 
+        # compute a square support matrix (including junctions and coverage) 
+        # between reads and isoforms to:
+        # a) identify the best matching isoform to start with
+        # b) prune redundant isoforms in the end
         for me in self.multi_events[circname]:
-            for start, end in me.linear:
-                supported = np.array([I.splice_support(start,end) for I in isoforms])
+            for left, right in me.linear:
+                supported = np.array([I.splice_support(left, right) for I in isoforms])
                 if not supported.any():
-                    print "need new splice junction or drop an intervening exon!"
+                    best = isoforms[-1] # TODO: sort by best support, including exon overlap
+                    
+                    has_left = left in best.exon_ends
+                    has_right = right in best.exon_starts
+                    
+                    if not has_left and not has_right:
+                        self.logger.info("discovered new intron {left}-{right}".format(**locals()))
+                        new_iso = best.insert_new_intron(left, right)
+                        assert new_iso.splice_support(left, right)
+                        isoforms.append(new_iso)
+                        
+                    elif not has_right:
+                        best = isoforms[-1]
+                        self.logger.info("discovered alternative exon start {left}".format(left=left))
+                        new_iso = best.adjust_exon_start(left, right)
+                        assert new_iso.splice_support(left, right)
+                        isoforms.append(new_iso)
+
+                    elif not has_left:
+                        best = isoforms[-1]
+                        self.logger.info("discovered alternative exon end {left}".format(right=right))
+                        new_iso = best.adjust_exon_end(left, right)
+                        assert new_iso.splice_support(left, right)
+                        isoforms.append(new_iso)
+
+                    else:
+                        best = isoform[-1]
+                        self.logger.info("discovered skipped exon {left}-{right}".format(left=left, right=right))
+                        new_iso = best.skip_exons_between(left, right)
+                        assert new_iso.splice_support(left, right)
+                        isoforms.append(new_iso)
+                        
 
             for start, end in me.unspliced:
                 supported = np.array([I.exon_support(start,end) for I in isoforms])
@@ -217,8 +328,9 @@ class ReconstructedCircIsoforms(object):
 
     def __iter__(self):
         for name in sorted(self.multi_events.keys()):
-            if name != "ME:circ_010922":
-                continue
+            #if name != "ME:circ_010922":
+                #continue
+            print name
             yield self.reconstruct(name)
 
 for isoform_set in ReconstructedCircIsoforms(file(args[0])):
