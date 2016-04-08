@@ -33,6 +33,7 @@ parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="numbe
 parser.add_option("","--fpk",dest="fpk",action="store_true",default=False, help="if set, --n-frags is interpreted as frags-per-kilobase")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
+parser.add_option("","--seed",dest="seed",type=int,default=0,help="seed for pseudo random number generator (default=random)")
 parser.add_option("-o","--output",dest="output",default="simulation",help="path, where to store the output (default='./simulation')")
 parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
 
@@ -69,6 +70,10 @@ if options.stdout:
     out_file.write('# redirected to stdout\n')
     logger.info('redirected {0} to stdout'.format(options.stdout))
     globals()[varname] = sys.stdout
+
+# initialize random number generator
+if options.seed:
+    np.random.seed(options.seed)
 
 if options.system:
     import importlib
@@ -171,6 +176,28 @@ def mutate(seq, rate):
     
     return "".join(seq)
 
+def test_mate(mate, circ):
+    """
+    tests if the exon boundaries of the mate make sense
+    """
+    #deviate = 0
+    
+    #for start, end in mate.exon_bounds:
+        #has_start = start in circ.exon_starts
+        #has_end = end in circ.exon_ends
+        #if not has_start and not has_end and mate.exon_count > 1:
+            #return False
+        #elif not has_start or not has_end:
+            #deviate += 1
+
+    #if deviate > 2:
+        #return False
+    
+    #return True
+
+    circseq = circ.spliced_sequence.lower() * 2
+    return mate.spliced_sequence.lower() in circseq
+
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
     # keep circ name by junction coordinate for later, when we write reads and need the names!
@@ -207,10 +234,10 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
         #print "M2", m2_start, m2_end, m2_g_start, m2_g_end
         mate2 = circ.cut(m2_g_start, m2_g_end)
         
-        #print mate1
-        #print mate2
         assert mate1.spliced_length == options.read_len
         assert mate2.spliced_length == options.read_len
+        assert test_mate(mate1, circ)
+        assert test_mate(mate2, circ)
         
         # simulate forward/reverse mate pairs
         mate1_seq = mate1.spliced_sequence
