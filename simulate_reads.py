@@ -177,7 +177,7 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
     circ_junction_names[ (circ.chrom, circ.start, circ.end, circ.sense) ] = circ.name
 
     L = circ.spliced_length
-    if L < options.read_len:
+    if L <= options.read_len:
         logger.warning("skipping {0} because it is shorter than read length, which is currently not supported".format(circ.name))
         continue
 
