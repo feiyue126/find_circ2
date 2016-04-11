@@ -6,7 +6,7 @@
 
 # file:         generate_synthetic_reads.r
 # created:      2016-03-21
-# last update:  2016-04-04
+# last update:  2016-04-11
 # author:       Marcel Schilling <marcel.schilling@mdc-berlin.de>
 # purpose:      generate synthetic reads based on known circRNAs (in BED format)
 
@@ -15,6 +15,8 @@
 # change log (reverse chronological) #
 ######################################
 
+# 2016-04-11: switched input from find_circ v1 bed-like output & AnnotationHub to BED & Ensembl GTF
+#             / removed commented-out parallelization code
 # 2016-04-04: disabled line wrapping in FASTA output
 #             fixed read naming
 #             fixed collapsing of all fragments from the same circRNA to the same start position /
@@ -28,8 +30,6 @@
 # libraries #
 #############
 
-#require(doMC) # parallelize plyr calls
-require(AnnotationHub)
 require(magrittr)
 require(GenomicRanges)
 require(plyr)
@@ -41,28 +41,16 @@ require(GenomicFeatures)
 ##############
 
 #threads<-detectCores()
-bsgenome<-"BSgenome.Celegans.Ensembl.WBcel235"
-annotation<-"Caenorhabditis_elegans.WBcel235.83.gtf"
-circs.bed<-"wbcel235.circs.bed.gz"
-contigs.to.keep<-c("I","II","III","IV","V","X")
+bsgenome<-"BSgenome.Celegans.UCSC.ce6"
+annotation.gtf<-"Caenorhabditis_elegans.WS190.54.gtf.gz"
+circs.bed<-"ce6.circs.bed.gz"
+contigs.to.keep<-paste0("chr",c("I","II","III","IV","V","X"))
 colnames.circs.bed<-c("chr"
                      ,"start"
                      ,"end"
                      ,"name"
                      ,"n_reads"
                      ,"strand"
-                     ,"n_uniq"
-                     ,"uniq_bridges"
-                     ,"best_qual_left"
-                     ,"best_qual_right"
-                     ,"tissues"
-                     ,"tiss_counts"
-                     ,"edits"
-                     ,"anchor_overlap"
-                     ,"breakpoints"
-                     ,"signal"
-                     ,"strandmatch"
-                     ,"category"
                      )
 nreads_min<-10
 sep.coord<-","
@@ -83,13 +71,6 @@ read1.fa<-"synthetic_reads.R1.fa.gz"
 read2.fa<-"synthetic_reads.R2.fa.gz"
 
 
-##################
-# initialization #
-##################
-
-#registerDoMC(threads) # initialize parallelization engine for plyr
-
-
 ###############
 # load genome #
 ###############
@@ -104,37 +85,9 @@ eval(parse(text=paste("bsgenome <-",bsgenome)))
 # load annotation #
 ###################
 
-# load annotation hub GRanges
-annotations<-AnnotationHub() %>%
-             query("GRanges")
-
-# try querying annotation to use by name
-if(annotation %in% names(annotations)){
-  annotation<-annotations[[annotation]]
-
-# in case of failure, try querying by title
-} else {
-  annotations<-annotations %>%
-               subset(title==annotation)
-      
-  # if successful, get annotation GRanges object
-  if(length(annotations)){
-    annotation<-annotations[[1]]
-
-  # if unsuccessful, exit with error
-  } else {
-    annotation %>%
-    paste0("error: Could not find GRanges object for annotation '"
-          ,.
-          ,"'."
-          ) %>%
-    stop
-    
-  }
-}
-
-# clean up annotation hub
-rm(annotations)
+annotation<-annotation.gtf %>%
+            makeTxDbFromGFF %>%
+            asGFF
 
 seqlevels(annotation,force=T)<-contigs.to.keep
 
@@ -147,7 +100,6 @@ seqlevels(annotation,force=T)<-contigs.to.keep
 circs<-circs.bed %>%
        read.table %>%
        setNames(colnames.circs.bed) %>%
-       {.[grep("CIRCULAR",.$category),]} %>%
        {.[.$chr %in% contigs.to.keep,]} %$%
        {.[.$n_reads>=nreads_min,]} %$%
        {
@@ -185,7 +137,6 @@ llply(function(circ)
                 end(.)[which.max(end(.))]<-end(circ)
                 .
               }
-#             ,.parallel=T
              ) %>%
         GRangesList %>%
         {
@@ -196,7 +147,6 @@ llply(function(circ)
             GRangesList
           }
         }
-#     ,.parallel=T
      ) %>%
 llply(function(isoforms)
         isoforms %>%
@@ -274,7 +224,6 @@ fragments<-circs %>%
                        setNames(startpos)
                      }
                    )
-#                ,.parallel=T
                 ) %>%
            {
              setNames(.
@@ -292,8 +241,6 @@ fragments<-circs %>%
            unlist %>%          # but it is!
            DNAStringSet %>%
            unique
-
-
 
 
 #############
@@ -383,7 +330,6 @@ llply(function(reads){
                              `-`(starts[[read]]) %>%
                              `+`(1)
                     )
-#             ,.parallel=T
              )
       }
      ) %>%
@@ -477,11 +423,9 @@ llply(llply
              ) %>%
         setNames(read,.)
       }
-#     ,.parallel=T
      ) %>%
 llply(do.call
      ,what=c
-#     ,.parallel=T
      ) %>%
 (
   function(mates){
