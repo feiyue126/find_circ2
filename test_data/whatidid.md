@@ -1,22 +1,14 @@
-## Testing the --test feature
+# Measuring find_circ2 performance
 
-# Using Marcel's C.elegans reads
+This worksheet describes the simulations and analyses run to make the figures for *Jens et al. 2016* .
 
-```
-    # in find_circ2/test_data
-    PREFIX=/data/BIO3/home/mschilli/repo/global/external/marvin/find_circ2/test_data/
-    INDEX=/data/BIO3/indices/WBcel235_bwa_0.7.5a-r405/WBcel235.fa
-    
-    bwa mem -t16 -k 15 -T 1 $INDEX \
-        ${PREFIX}/synthetic_reads.R1.fa.gz \
-        ${PREFIX}/synthetic_reads.R2.fa.gz \
-        > /scratch/circdetection_test_data/marcel_test.sam
-    
-    cat /scratch/circdetection_test_data/marcel_test.sam | \
-        ../find_circ.py --test -G $INDEX --stdout=test | les
-```
+## Testing sensitivity and precision
 
-# Human circRNAs from circbase
+First we simulate reads from known circRNAs in human and worm to benchmark the sensitivity and precision of spliced read recovery.
+
+### Simulating human circRNAs from circbase
+
+We take 1000 circRNAs randomly from circBase. Analysis is further restricted to circRNAs of at least 200nt to have a comparable set from which different read-lengths can be drawn. The simulation does currently not allow drawing reads that are longer than the circRNA.
 
 ```
     # in find_circ2/test_data
@@ -93,7 +85,10 @@
 ```
 
 
-# C.elegans circRNAs from circBASE
+### C.elegans circRNAs from circBASE
+
+We repeat this exercise for *C.elegans*
+
 ```
     wget http://www.circbase.org/download/cel_ce6_circRNA.bed
     cat cel_ce6_circRNA.bed | unsort.py | head -n 1000 | cut -f 1,2,3,4,5,6 | \
@@ -164,91 +159,28 @@
         ../merge_bed.py -6 --score sim/${SAMPLE}/circ_splice_sites.bed run/${SAMPLE}/circ_splice_sites.bed | \
             histogram.py -s -q -b0 --linear-fit -x "simulated junction reads" -y "recovered junction reads" -t "backspliced read recovery" --pdf=run/${SAMPLE}/run_vs_sim.pdf
     } done;
-
 ```
 
+## Reconstructing circRNA structure
 
-
-# C.elegans 'golden set'
-
-Sensitivity seems to decrease in C.elegans when read length is 200. This is quite strange and we suspect it could be due to false positives in circBASE. For internal use, we generate a 'golden set' of circ-RNAs that don't get any warnings by find_circ2.
+The multievent output allows to attempt a reconstrucion of the multi-exonic structure of each circRNA. We use the simulated circRNAs as a benchmark, starting from all known exons, or no known exons at all.
 
 ```
-    INDEX=/data/rajewsky/indices/ce6_bwa_0.7.5a/ce6.fa
-    N_FRAGS=100
-    SEED=1336587
-
-    cat run/ce6/r200_f450_fpk100/m0.00/circ_splice_sites.bed | grep -v WARN_EXT_2MM | grep -v WARN_OUTSIDE | grep -v WARN_MULTI > ce6_golden_set.bed
-    cut -f 1,2,3,4,5,6 ce6_golden_set.bed | grep -v '#' | exon_intersect.py -S ce6 -m ce6_golden.ucsc > ce6_golden.bed
+    # obtained the ensGene transcript models from UCSC table browser in GTF format
+    grep exon ce6.ensGene.gtf > ce6.ensGene.exons.gtf
     
-    # generating simulated reads
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=100 --frag-len=350 --mutate=0.00 -o sim_gold/ce6/r100_f350_fpk100/m0.00 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=100 --frag-len=350 --mutate=0.01 -o sim_gold/ce6/r100_f350_fpk100/m0.01 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=100 --frag-len=350 --mutate=0.05 -o sim_gold/ce6/r100_f350_fpk100/m0.05 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=100 --frag-len=350 --mutate=0.10 -o sim_gold/ce6/r100_f350_fpk100/m0.10 --fpk --seed=${SEED} &
-
-    # generating shorter simulated reads
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=50 --frag-len=350 --mutate=0.00 -o sim_gold/ce6/r50_f350_fpk100/m0.00 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=50 --frag-len=350 --mutate=0.01 -o sim_gold/ce6/r50_f350_fpk100/m0.01 --fpk --seed=${SEED} &
-
-    # generating longer simulated reads
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=150 --frag-len=350 --mutate=0.00 -o sim_gold/ce6/r150_f350_fpk100/m0.00 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=150 --frag-len=350 --mutate=0.01 -o sim_gold/ce6/r150_f350_fpk100/m0.01 --fpk --seed=${SEED} &
-
-    # generating very long simulated reads
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=200 --frag-len=450 --mutate=0.00 -o sim_gold/ce6/r200_f450_fpk100/m0.00 --fpk --seed=${SEED} &
-    time cat ce6_golden.ucsc | grep ANNOTATED | grep INTERNAL | \
-        ../simulate_reads.py -G $INDEX --n-frags=${N_FRAGS} --read-len=200 --frag-len=450 --mutate=0.01 -o sim_gold/ce6/r200_f450_fpk100/m0.01 --fpk --seed=${SEED} &
-
-
-    declare -a ce6_samples=(ce6/r50_f350_fpk100/m0.01 ce6/r100_f350_fpk100/m0.00 ce6/r100_f350_fpk100/m0.01 ce6/r100_f350_fpk100/m0.05 ce6/r100_f350_fpk100/m0.10 ce6/r150_f350_fpk100/m0.01 ce6/r200_f450_fpk100/m0.01 ce6/r50_f350_fpk100/m0.00 ce6/r150_f350_fpk100/m0.00 ce6/r200_f450_fpk100/m0.00)
-
-    # mapping
+    # de novo reconstruction
     for SAMPLE in "${ce6_samples[@]}"
     do {
-        mkdir -p run_gold/${SAMPLE}
-        bwa mem -t16 -k 14 -T 1 -L 3,3 -O 6,6 -E 3,3 -p $INDEX sim_gold/${SAMPLE}/simulated_reads.fa.gz > run_gold/${SAMPLE}/aligned.sam
+            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv 2> run/${SAMPLE}/reconstruct.log > run/${SAMPLE}/reconstructed.ucsc &
     } done;
 
-    # running find_circ2
-    for SAMPLE in "${ce6_samples[@]}"
+    for SAMPLE in "${hg19_samples[@]}"
     do {
-        ../find_circ.py run_gold/${SAMPLE}/aligned.sam -o run_gold/${SAMPLE} --test -G $INDEX \
-            --known-lin=sim/${SAMPLE}/lin_splice_sites.bed \
-            --known-circ=sim/${SAMPLE}/circ_splice_sites.bed &
-    } done;
-
-    # making scatter plots
-    for SAMPLE in "${ce6_samples[@]}"
-    do {
-        ../merge_bed.py -6 --score sim_gold/${SAMPLE}/circ_splice_sites.bed run_gold/${SAMPLE}/circ_splice_sites.bed | \
-            histogram.py -s -q -b0 --linear-fit -x "simulated junction reads" -y "recovered junction reads" -t "backspliced read recovery" --pdf=run_gold/${SAMPLE}/run_vs_sim.pdf
-    } done;
-
-```
-
-
-# let's find out which circRNAs have higher/lower sensitivity of circRNAs of different lengths
-```
-    declare -a ce6_samples=(ce6/r50_f350_fpk100/m0.00 ce6/r100_f350_fpk100/m0.00 ce6/r150_f350_fpk100/m0.00 ce6/r200_f450_fpk100/m0.00)
-    for SAMPLE in "${ce6_samples[@]}"
-    do {
-        ../merge_bed.py -6 --score sim_gold/${SAMPLE}/circ_splice_sites.bed run_gold/${SAMPLE}/circ_splice_sites.bed | \
-            lfc.py 2 3 1 | cut -f 1,5 > run_gold/${SAMPLE}/circ_sens.tsv
+            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv 2> run/${SAMPLE}/reconstruct.log > run/${SAMPLE}/reconstructed.ucsc &
     } done;
     
-    merge.py run_gold/ce6/r150_f350_fpk100/m0.00/circ_sens.tsv run_gold/ce6/r200_f450_fpk100/m0.00/circ_sens.tsv -u | \
-        histogram.py -s -x "recovery r150" -y "recovery r200" -S -q --pdf funky_recovery.pdf
+    # with prior knowledge of annotated exons
+    ../reconstruct_isoforms.py run/ce6/r200_f450_fpk100/m0.00/multi_events.tsv --known-exons=ce6.ensGene.exons.gtf
     
-    merge.py run_gold/ce6/r150_f350_fpk100/m0.00/circ_sens.tsv run_gold/ce6/r200_f450_fpk100/m0.00/circ_sens.tsv -u | \
-        scorethresh.py 2 0 | scorethresh.py -3 -.5 > two_funky_circs
 ```

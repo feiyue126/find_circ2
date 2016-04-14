@@ -115,8 +115,6 @@ class SupportedCircRNA(CircRNA):
             for x in xrange(start,end):
                 self.exonic_map[x] = i
 
-        print self.origin
-        
     def reset_counts(self):
         self.exonic_support = defaultdict(int)
         self.junction_support = defaultdict(int)
@@ -224,9 +222,9 @@ class SupportedCircRNA(CircRNA):
         
     @property
     def support_summary(self):
-        print self.junction_support
-        print self.exonic_support
-        print self.exon_count
+        #print self.junction_support
+        #print self.exonic_support
+        #print self.exon_count
         supported_junctions = len(self.junction_support.keys())
         if self.junctions:
             junc_fraction = supported_junctions / float(len(self.junctions))
@@ -266,6 +264,7 @@ class ReconstructedCircIsoforms(object):
             #print parts
             
             me = MultiEvent()
+            
             me.chrom = parts[0]
             me.start = int(parts[1])
             me.end = int(parts[2])
@@ -276,9 +275,16 @@ class ReconstructedCircIsoforms(object):
 
             me.linear = set(to_coords(parts[7]))
             me.unspliced = set(to_coords(parts[9]))
-            me.exon_starts_set = set([me.start]) | set([l[1] for l in me.linear])
-            me.exon_ends_set = set([me.end]) | set([l[0] for l in me.linear])
+            me.exon_starts = [me.start,] + [l[1] for l in me.linear]
+            me.exon_ends = [l[0] for l in me.linear] + [me.end,]
+            me.exon_starts_set = set(me.exon_starts)
+            me.exon_ends_set = set(me.exon_ends)
 
+            me.exon_bound_lookup = {}
+            for start, end in zip(me.exon_starts, me.exon_ends):
+                me.exon_bound_lookup[start] = end
+                me.exon_bound_lookup[end] = start
+            
             self.multi_events[me.name].append(me)
 
 
@@ -298,7 +304,7 @@ class ReconstructedCircIsoforms(object):
                 current_exons_by_bound[end].append( (start, end) )
 
             starts, ends = known_bounds.transpose()
-            isoforms = [SupportedCircRNA("{0}_known".format(circname),chrom, sense, starts, ends)]
+            isoforms = [SupportedCircRNA("{0}:known".format(circname),chrom, sense, starts, ends)]
             self.logger.info("starting reconstruction of {circname} from {n} known exons".format(circname=circname, n=len(known_bounds) ))
         else:
             # no known exons in this region? 
@@ -308,7 +314,7 @@ class ReconstructedCircIsoforms(object):
             current_exons_by_bound[first.start].append( (first.start, first.end) )
             current_exons_by_bound[first.end].append( (first.start, first.end) )
             
-            isoforms = [SupportedCircRNA("{0}_denovo".format(circname),chrom, sense, starts, ends)]
+            isoforms = [SupportedCircRNA("{0}:denovo".format(circname),chrom, sense, starts, ends)]
             self.logger.info("starting reconstruction of {circname} de novo".format(circname=circname) )
 
         all_multi_events = self.multi_events[circname]
@@ -359,14 +365,14 @@ class ReconstructedCircIsoforms(object):
 
             # next, take care of alternative 5' and 3' end positions.
             for start in (me.exon_starts_set - best.exon_starts_set):
-                end = me.exon_bound_lookup(start)
+                end = me.exon_bound_lookup[start]
                 self.logger.info("  discovered alternative exon start {left}".format(left=left))
                 new_iso = best.adjust_exon_start(start, end)
                 assert new_iso.splice_support(start, end)
                 best = new_iso
 
             for end in (me.exon_ends_set - best.exon_ends_set):
-                start = me.exon_bound_lookup(end)
+                start = me.exon_bound_lookup[end]
                 self.logger.info("  discovered alternative exon end {left}".format(right=right))
                 new_iso = best.adjust_exon_end(start, end)
                 assert new_iso.splice_support(start, end)
@@ -400,6 +406,8 @@ class ReconstructedCircIsoforms(object):
             matches = (matrix[i] == 1.)
             # are more me's matched if we accept this isoform?
             if (me_matched | matches).sum() > me_matched.sum():
+                # record number of supporting/compatible ME's as score
+                isoforms[i].score = me_support[i]
                 minimal_set.append(isoforms[i])
                 me_matched |= matches
             
@@ -407,15 +415,13 @@ class ReconstructedCircIsoforms(object):
         return minimal_set
  
 
-
     def __iter__(self):
         for name in sorted(self.multi_events.keys()):
             #if name != "ME:circ_010922":
                 #continue
-            print name
+            #print name
             yield self.reconstruct(name)
 
 for isoform_set in ReconstructedCircIsoforms(file(args[0])):
     for iso in isoform_set:
-        print iso.support_summary
-
+        print iso
