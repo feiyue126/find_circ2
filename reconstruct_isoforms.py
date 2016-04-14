@@ -101,17 +101,22 @@ if options.known_exons:
 
 class SupportedCircRNA(CircRNA):
     def __init__(self, name, chrom, sense, exon_starts, exon_ends, min_exon_overlap=.85, **kwargs):
-        super(CircRNA,self).__init__(name, chrom, sense, exon_starts, exon_ends, (exon_starts[0],exon_starts[0]), **kwargs)
+        super(SupportedCircRNA,self).__init__(name, chrom, sense, exon_starts, exon_ends, (exon_starts[0],exon_starts[0]), **kwargs)
         
+        self.logger = logging.getLogger("SupportedCircRNA")
         self.min_exon_overlap = min_exon_overlap
         self.exonic_map = {}
         self.junctions = set([ (min(left, right), max(left, right)) for left, right in self.intron_bounds])
+        self.exon_starts_set = set(self.exon_starts) 
+        self.exon_ends_set = set(self.exon_ends)
         self.reset_counts()
         
         for i,(start,end) in enumerate(self.exon_bounds):
             for x in xrange(start,end):
                 self.exonic_map[x] = i
 
+        print self.origin
+        
     def reset_counts(self):
         self.exonic_support = defaultdict(int)
         self.junction_support = defaultdict(int)
@@ -185,7 +190,38 @@ class SupportedCircRNA(CircRNA):
         
         return SupportedCircRNA("{0}_skipped_{1}-{2}".format(self.name, i, j), self.chrom, self.sense, new_exon_starts, new_exon_ends)
 
+    def compatibility_score(self, me):
+        
+        max_junc_score = 12. * len(me.linear) + 2.
+        junc_score = \
+            10. * len( me.linear & self.junctions) + \
+            len(me.exon_starts_set & self.exon_starts_set) + \
+            len(me.exon_ends_set & self.exon_ends_set)
 
+        junc_ratio = junc_score/max_junc_score
+        
+        max_exon_score = 0.
+        exon_score = 0
+        for start,end in me.unspliced:
+            L = end - start
+            max_exon_score += L * self.min_exon_overlap
+            
+            overlap = 0
+            for x in xrange(start,end):
+                if x in self.exonic_map:
+                    overlap += 1
+
+            # allow a little bit of misaligned coverage (default=15%), so max-score is 0.85 * L
+            exon_score += min(self.min_exon_overlap*L, overlap )
+            
+        #self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
+        
+        if max_exon_score:
+            return 0.75 * junc_ratio + 0.25 * exon_score/max_exon_score
+        else:
+            return junc_ratio
+        
+        
     @property
     def support_summary(self):
         print self.junction_support
@@ -201,7 +237,6 @@ class SupportedCircRNA(CircRNA):
         exon_fraction = supported_exons / float(self.exon_count)
 
         return "junc_fraction={0} exon_fraction={1}".format(junc_fraction, exon_fraction)
-
 
 
 class ReconstructedCircIsoforms(object):
@@ -241,6 +276,8 @@ class ReconstructedCircIsoforms(object):
 
             me.linear = set(to_coords(parts[7]))
             me.unspliced = set(to_coords(parts[9]))
+            me.exon_starts_set = set([me.start]) | set([l[1] for l in me.linear])
+            me.exon_ends_set = set([me.end]) | set([l[0] for l in me.linear])
 
             self.multi_events[me.name].append(me)
 
@@ -274,55 +311,100 @@ class ReconstructedCircIsoforms(object):
             isoforms = [SupportedCircRNA("{0}_denovo".format(circname),chrom, sense, starts, ends)]
             self.logger.info("starting reconstruction of {circname} de novo".format(circname=circname) )
 
-
-        # TODO: 
+        all_multi_events = self.multi_events[circname]
+        self.logger.debug("processing {0} multi events".format(len(all_multi_events)) )
+        
         # compute a square support matrix (including junctions and coverage) 
         # between reads and isoforms to:
         # a) identify the best matching isoform to start with
         # b) prune redundant isoforms in the end
-        for me in self.multi_events[circname]:
-            for left, right in me.linear:
-                supported = np.array([I.splice_support(left, right) for I in isoforms])
-                if not supported.any():
-                    best = isoforms[-1] # TODO: sort by best support, including exon overlap
-                    
-                    has_left = left in best.exon_ends
-                    has_right = right in best.exon_starts
-                    
-                    if not has_left and not has_right:
-                        self.logger.info("discovered new intron {left}-{right}".format(**locals()))
-                        new_iso = best.insert_new_intron(left, right)
-                        assert new_iso.splice_support(left, right)
-                        isoforms.append(new_iso)
-                        
-                    elif not has_right:
-                        best = isoforms[-1]
-                        self.logger.info("discovered alternative exon start {left}".format(left=left))
-                        new_iso = best.adjust_exon_start(left, right)
-                        assert new_iso.splice_support(left, right)
-                        isoforms.append(new_iso)
 
-                    elif not has_left:
-                        best = isoforms[-1]
-                        self.logger.info("discovered alternative exon end {left}".format(right=right))
-                        new_iso = best.adjust_exon_end(left, right)
-                        assert new_iso.splice_support(left, right)
-                        isoforms.append(new_iso)
+        matrix = np.array([[I.compatibility_score(me) for me in all_multi_events] for I in isoforms])
+        #best support (by any isoform) for each me is matrix.max(axis=0)
+        to_process = list((matrix.max(axis=0) < 1.).nonzero()[0])
+        #print "the following me's are not fully compatible with any isoform in the list", to_process
+        
+        while len(to_process):
+            # pick the first incompatible me
+            i = to_process.pop(0)
+            me = all_multi_events[i]
+            
+            # and find the best matching current isoform to start with
+            ties = (matrix[:,i] == matrix[:,i].max() ).nonzero()[0]
+            logger.debug("selecting candidates from {0}".format(matrix[:,i]) )
+            
+            # in case of ties, pick the one with more junctions to avoid fragmentation
+            scores = [(isoforms[ind].exon_count, ind) for ind in ties]
+            logger.debug("ties={0}".format(ties))
+            logger.debug("scores={0}".format(scores))
+            j = sorted(scores, reverse=True)[0][1]
+            
+            best = isoforms[j]
+            logger.debug("best matched isoform {0}".format(best) )
+            
+            self.logger.debug("selected incompatible me {0} and best-matched isoform {1} at compatibility_score {2}".format(i,j, matrix[j][i]) )
+            
+            # first take care of completely unknown junctions
+            for left, right in (me.linear - best.junctions):
+                if (left in best.exon_ends_set) and (right in best.exon_starts_set):
+                    self.logger.info("  discovered skipped exon {left}-{right}".format(left=left, right=right))
+                    new_iso = best.skip_exons_between(left, right)
+                    assert new_iso.splice_support(left, right)
+                else:
+                    self.logger.info("  discovered new intron {left}-{right}".format(**locals()))
+                    new_iso = best.insert_new_intron(left, right)
+                    assert new_iso.splice_support(left, right)
 
-                    else:
-                        best = isoform[-1]
-                        self.logger.info("discovered skipped exon {left}-{right}".format(left=left, right=right))
-                        new_iso = best.skip_exons_between(left, right)
-                        assert new_iso.splice_support(left, right)
-                        isoforms.append(new_iso)
-                        
+                best = new_iso
 
+            # next, take care of alternative 5' and 3' end positions.
+            for start in (me.exon_starts_set - best.exon_starts_set):
+                end = me.exon_bound_lookup(start)
+                self.logger.info("  discovered alternative exon start {left}".format(left=left))
+                new_iso = best.adjust_exon_start(start, end)
+                assert new_iso.splice_support(start, end)
+                best = new_iso
+
+            for end in (me.exon_ends_set - best.exon_ends_set):
+                start = me.exon_bound_lookup(end)
+                self.logger.info("  discovered alternative exon end {left}".format(right=right))
+                new_iso = best.adjust_exon_end(start, end)
+                assert new_iso.splice_support(start, end)
+                best = new_iso
+
+            # finally, if there is unspliced coverage in an intronic region, remove this intron
             for start, end in me.unspliced:
-                supported = np.array([I.exon_support(start,end) for I in isoforms])
-                if not supported.any():
-                    print "Need new exon or retained intron"
-                    
-        return isoforms
+                if not best.exon_support(start,end):
+                    #print "Need new exon or retained intron"
+                    self.logger.info("  removing intron with unspliced coverage from {start}-{end}".format(start=start, end=end) )
+                    best = best.remove_intron_overlapping(start, end)
+
+            new_compat = best.compatibility_score(me)
+            if new_compat < 1.:
+                self.logger.warning("  unsatisfyable multievent. Ignoring {0}".format(me))
+                all_multi_events.remove(me)
+            else:
+                isoforms.append(best)
+                
+            # recompute matrix
+            matrix = np.array([[I.compatibility_score(me) for me in all_multi_events] for I in isoforms])
+            to_process = list((matrix.max(axis=0) < 1.).nonzero()[0])
+            self.logger.debug(" recomputed compatibility matrix with {0} incompatible ME's left".format(len(to_process) ) )
+        
+        # prune non-essential isoforms and sort by ME support
+        me_support = (matrix == 1).sum(axis=1)
+        me_matched= np.zeros(len(all_multi_events), dtype=bool)
+        logger.debug("me_support {0}".format(me_support) )
+        minimal_set = []
+        for i in me_support.argsort()[::-1]:
+            matches = (matrix[i] == 1.)
+            # are more me's matched if we accept this isoform?
+            if (me_matched | matches).sum() > me_matched.sum():
+                minimal_set.append(isoforms[i])
+                me_matched |= matches
+            
+        self.logger.debug("---> returning minimal set of {0} isoforms compatible with all {1} multi-events".format(len(minimal_set), len(all_multi_events)) )
+        return minimal_set
  
 
 
