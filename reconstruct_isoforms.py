@@ -25,7 +25,9 @@ parser = optparse.OptionParser(usage=usage)
 #parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
 #parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--known-exons",dest="known_exons",default="",help="GTF file with known exons")
-#parser.add_option("","--min-segment",dest="min_seg",type=int,default=13,help="minimum size of span to be detectable/~BWA MEM min. segment size (default=13)")
+parser.add_option("","--max-isoforms",dest="max_isoforms",type=int,default=10,help="maximal number of candidate isoforms to investigate (default=10)")
+parser.add_option("","--max-size",dest="max_size",type=int,default=100,help="maximal size of genomic region to investigate in kb, to prevent excessive RAM usage (default=100kb)")
+parser.add_option("","--max-exon-size",dest="max_exon_size",type=int,default=10000,help="maximal size of an exon in nt to prevent excessive RAM usage (default=10000)")
 #parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--self-test",dest="self_test",action="store_true",default=False, help="if set, perform unit-tests instead of running on input data")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
@@ -41,11 +43,26 @@ if not os.path.isdir(options.output):
     os.makedirs(options.output)
 
 # prepare logging system
+if options.debug:
+    lvl = logging.DEBUG
+else:
+    lvl = logging.INFO
 FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
-#logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(options.output,"run.log"),filemode='w')
-logging.basicConfig(level=logging.DEBUG,format=FORMAT)#,filename=os.path.join(options.output,"run.log"),filemode='w')
+logging.basicConfig(level=lvl,format=FORMAT,filename=os.path.join(options.output,"reconstruct.log"),filemode='w')
 logger = logging.getLogger('reconstruct_isoforms.py')
 logger.info("reconstruct_isoforms.py {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
+
+# prepare output files
+iso_file = file(os.path.join(options.output,"reconstructed.ucsc"),"w")
+psi_file  = file(os.path.join(options.output,"psi.bed"),"w")
+
+# redirect output to stdout, if requested
+if options.stdout:
+    varname = "{0}_file".format(options.stdout)
+    out_file = globals()[varname]
+    out_file.write('# redirected to stdout\n')
+    logger.info('redirected {0} to stdout'.format(options.stdout))
+    globals()[varname] = sys.stdout
 
 
 class ExonStorage(object):
@@ -121,10 +138,13 @@ class SupportedCircRNA(CircRNA):
         self.exon_starts_set = set(self.exon_starts) 
         self.exon_ends_set = set(self.exon_ends)
         self.reset_counts()
-        
+
         for i,(start,end) in enumerate(self.exon_bounds):
-            for x in xrange(start,end):
-                self.exonic_map[x] = i
+            if (end - start) > options.max_exon_size:
+                self.logger.warning("exon{0} of circRNA {1} is {2} kb, exceeding --max-exon-size. Disabling exonic_map".format(i, name, (end-start)/1000.) )
+            else:
+                for x in xrange(start,end):
+                    self.exonic_map[x] = i
 
     def reset_counts(self):
         self.exonic_support = defaultdict(int)
@@ -213,7 +233,7 @@ class SupportedCircRNA(CircRNA):
         new_exon_ends = new_exon_ends[:i+1] + new_exon_ends[j:]
         new_exon_starts = new_exon_starts[:i+1] + new_exon_starts[j:]
         
-        return SupportedCircRNA("{0}_skipped_{1}-{2}".format(self.name, i, j), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+        return SupportedCircRNA("{0}_skipped_exons_{1}-{2}".format(self.name, i+1, j-1), self.chrom, self.sense, new_exon_starts, new_exon_ends)
 
     def compatibility_score(self, me):
         
@@ -238,8 +258,9 @@ class SupportedCircRNA(CircRNA):
 
             # allow a little bit of misaligned coverage (default=15%), so max-score is 0.85 * L
             exon_score += min(self.min_exon_overlap*L, overlap )
-            
-        self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
+
+        if options.debug:
+            self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
         
         if max_exon_score:
             return 0.75 * junc_ratio + 0.25 * exon_score/max_exon_score
@@ -285,6 +306,8 @@ class MultiEvent(object):
             self.exon_bound_lookup[start] = end
             self.exon_bound_lookup[end] = start
 
+    def __str__(self):
+        return "MultiEvent({self.chrom}, start={self.start}, end={self.end}, score={self.score}, sense={self.sense}, read_name={self.read_name}, linear={self.linear}, unspliced={self.unspliced})".format(self=self)
 
 class ReconstructedCircIsoforms(object):
     def __init__(self, multi_event_source, known_exon_storage = known_exons):
@@ -313,7 +336,7 @@ class ReconstructedCircIsoforms(object):
                 current_exons_by_bound[end].append( (start, end) )
 
             starts, ends = known_bounds.transpose()
-            isoforms = [SupportedCircRNA("{0}:known".format(circname),chrom, sense, starts, ends)]
+            initial = SupportedCircRNA("{0}:known".format(circname),chrom, sense, starts, ends)
             self.logger.info("starting reconstruction of {circname} from {n} known exons".format(circname=circname, n=len(known_bounds) ))
         else:
             # no known exons in this region? 
@@ -323,9 +346,14 @@ class ReconstructedCircIsoforms(object):
             current_exons_by_bound[first.start].append( (first.start, first.end) )
             current_exons_by_bound[first.end].append( (first.start, first.end) )
             
-            isoforms = [SupportedCircRNA("{0}:denovo".format(circname),chrom, sense, starts, ends)]
+            initial = SupportedCircRNA("{0}:denovo".format(circname),chrom, sense, starts, ends)
             self.logger.info("starting reconstruction of {circname} de novo".format(circname=circname) )
 
+        if (initial.end - initial.start)/1000. > options.max_size:
+            self.logger.error("circRNA {0} exceeds --max-size in genomic size".format(circname))
+            return []
+        
+        isoforms = [initial]
         all_multi_events = self.multi_events[circname]
         self.logger.debug("processing {0} multi events".format(len(all_multi_events)) )
         self.logger.debug("initial isoform: '{0}'".format(isoforms[0]) )
@@ -340,35 +368,39 @@ class ReconstructedCircIsoforms(object):
         #print "the following me's are not fully compatible with any isoform in the list", to_process
         
         while len(to_process):
+            if len(isoforms) > options.max_isoforms:
+                self.logger.error("exhausted maximal number of candidate isoforms on circRNA {0}".format(circname))
+                return []
             # pick the first incompatible me
             i = to_process.pop(0)
             me = all_multi_events[i]
             
             # and find the best matching current isoform to start with
             ties = (matrix[:,i] == matrix[:,i].max() ).nonzero()[0]
-            logger.debug("selecting candidates from {0}".format(matrix[:,i]) )
+            self.logger.debug("selecting candidates from {0}".format(matrix[:,i]) )
             
             # in case of ties, pick the one with more junctions to avoid fragmentation
             scores = [(isoforms[ind].exon_count, ind) for ind in ties]
-            logger.debug("ties={0}".format(ties))
-            logger.debug("scores={0}".format(scores))
+            if options.debug:
+                self.logger.debug("ties={0}".format(ties))
+                self.logger.debug("scores={0}".format(scores))
             j = sorted(scores, reverse=True)[0][1]
             
             best = isoforms[j]
-            logger.debug("best matched isoform {0}".format(best) )
-            
-            self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.name) )
+            if options.debug:
+                self.logger.debug("best matched isoform {0}".format(best) )
+                self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.name) )
             
             # first take care of completely unknown junctions
             for left, right in (me.linear - best.junctions):
                 if (left in best.exon_ends_set) and (right in best.exon_starts_set):
                     self.logger.info("  discovered skipped exon {left}-{right}".format(left=left, right=right))
                     new_iso = best.skip_exons_between(left, right)
-                    assert new_iso.splice_support(left, right)
+                    assert new_iso.splice_support(left, right, count=False)
                 else:
                     self.logger.info("  discovered new intron {left}-{right}".format(**locals()))
                     new_iso = best.insert_new_intron(left, right)
-                    assert new_iso.splice_support(left, right)
+                    assert new_iso.splice_support(left, right, count=False)
 
                 best = new_iso
 
@@ -376,15 +408,15 @@ class ReconstructedCircIsoforms(object):
             for start in (me.exon_starts_set - best.exon_starts_set):
                 end = me.exon_bound_lookup[start]
                 self.logger.info("  discovered alternative exon start {left}".format(left=left))
-                new_iso = best.adjust_exon_start(start, end)
-                assert new_iso.splice_support(start, end)
+                new_iso = best.adjust_exon_start(start, end, count=False)
+                assert new_iso.splice_support(start, end, count=False)
                 best = new_iso
 
             for end in (me.exon_ends_set - best.exon_ends_set):
                 start = me.exon_bound_lookup[end]
                 self.logger.info("  discovered alternative exon end {left}".format(right=right))
-                new_iso = best.adjust_exon_end(start, end)
-                assert new_iso.splice_support(start, end)
+                new_iso = best.adjust_exon_end(start, end, count=False)
+                assert new_iso.splice_support(start, end, count=False)
                 best = new_iso
 
             # finally, if there is unspliced coverage in an intronic region, remove this intron
@@ -460,7 +492,7 @@ def multi_events_from_file(fname):
         yield me
     
 
-def test_double_exon():
+def test_reconstruction():
     print "running self-test 'double_exon'"
     multi_events = [
         MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
@@ -493,12 +525,28 @@ def test_double_exon():
         for iso in isoform_set:
             print iso
 
+    print "running self-test 'skipped_exon'"
+    test_exons = ExonStorage()
+    test_exons.add('chrNA', 10, 30, '+')
+    test_exons.add('chrNA', 70, 100, '+')
+    test_exons.add('chrNA', 150, 200, '+')
+
+    multi_events = [
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_complete_splice', linear = [(30,70),(100,150)], unspliced = [(71,99)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_skipped', linear = [(30,150)], unspliced = [(11,29)]),
+    ]
+    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+        for iso in isoform_set:
+            print iso
+
 
     
 if options.self_test:
-    test_double_exon()
+    test_reconstruction()
     
 else:
     for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
         for iso in isoform_set:
-            print iso
+            iso_file.write(str(iso) + '\n')
