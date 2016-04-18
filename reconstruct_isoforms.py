@@ -176,14 +176,9 @@ class SupportedCircRNA(CircRNA):
         return True
 
     def insert_new_intron(self, left, right):
-        new_exon_starts = list(self.exon_starts)
-        new_exon_ends = list(self.exon_ends)
-        
-        start_i = bisect.bisect_left(new_exon_starts, right)
-        end_i = bisect.bisect_left(new_exon_ends, left)
-        new_exon_starts.insert(start_i, right)
-        new_exon_ends.insert(end_i, left)
-        
+        new_exon_starts = sorted(list(self.exon_starts) + [right])
+        new_exon_ends = sorted(list(self.exon_ends) + [left])
+       
         return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
     
     def remove_intron_overlapping(self, left, right):
@@ -251,11 +246,18 @@ class SupportedCircRNA(CircRNA):
             L = end - start
             max_exon_score += L * self.min_exon_overlap
             
-            overlap = 0
-            for x in xrange(start,end):
-                if x in self.exonic_map:
-                    overlap += 1
-
+            # quick heuristic for finding the correct exon this guy should overlap with
+            middle = start + (end-start)/2.
+            try:
+                pos = self.map_to_spliced(middle)
+            except ValueError:
+                overlap = 0
+            else:
+                n_exon = self.map_to_exon(pos)
+                overlap_start = max(start, self.exon_starts[n_exon])
+                overlap_end = min(end, self.exon_ends[n_exon])
+                overlap = overlap_end - overlap_start
+            
             # allow a little bit of misaligned coverage (default=15%), so max-score is 0.85 * L
             exon_score += min(self.min_exon_overlap*L, overlap )
 
@@ -427,8 +429,10 @@ class ReconstructedCircIsoforms(object):
                     best = best.remove_intron_overlapping(start, end)
 
             new_compat = best.compatibility_score(me)
-            if new_compat < 1.:
+            if new_compat < 1. or best.spliced_length == 0:
                 self.logger.warning("  unsatisfyable multievent. Ignoring {0}".format(me))
+                if best.spliced_length == 0:
+                    self.logger.warning("  even worse, it produced a zero-length candidate!")
                 all_multi_events.remove(me)
             else:
                 isoforms.append(best)
