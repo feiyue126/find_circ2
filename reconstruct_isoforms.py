@@ -461,32 +461,33 @@ def multi_events_from_file(fname):
     
 
 def test_double_exon():
-    #print "running self-test 'double_exon'"
-    ##def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
-    #multi_events = [
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
-        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
-    #]
-    #for isoform_set in ReconstructedCircIsoforms(multi_events):
-        #for iso in isoform_set:
-            #print iso
+    print "running self-test 'double_exon'"
+    multi_events = [
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
+    ]
+    for isoform_set in ReconstructedCircIsoforms(multi_events):
+        for iso in isoform_set:
+            print iso
     
-    print "running self-test 'known_double_exon_intron_retention'"
+    print "running self-test 'known_triple_exon_intron_retention'"
     test_exons = ExonStorage()
     test_exons.add('chrNA', 10, 30, '+')
     test_exons.add('chrNA', 70, 100, '+')
+    test_exons.add('chrNA', 150, 200, '+')
 
     multi_events = [
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(20,50)]),
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(30,70)]),
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(35,85)]),
-        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(40,90)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(100,150)], unspliced = [(71,99)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron2', linear = [(30,70)], unspliced = [(90,120)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron1', linear = [(100,150)], unspliced = [(30,70)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_introns1_2', linear = [], unspliced = [(35,130)]),
+        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR', linear = [], unspliced = [(40,90)]),
     ]
     for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
         for iso in isoform_set:
