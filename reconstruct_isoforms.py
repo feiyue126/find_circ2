@@ -8,14 +8,14 @@ __licence__ = "GPL"
 __email__ = "marvin.jens@mdc-berlin.de"
 
 from byo.gene_model import transcripts_from_UCSC, CircRNA, Transcript
-from byo import rev_comp
+#from byo import rev_comp
 import os,sys
 import optparse
 import numpy as np
 import bisect
 import logging
 from collections import defaultdict
-from gzip import GzipFile
+#from gzip import GzipFile
 
 usage = """
    %prog [options] multi_events.tsv
@@ -236,55 +236,35 @@ class SupportedCircRNA(CircRNA):
 
         return "junc_fraction={0} exon_fraction={1}".format(junc_fraction, exon_fraction)
 
+class MultiEvent(object):
+    def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
+        self.name = name
+        self.chrom = chrom
+        self.start = start
+        self.end = end
+        self.score = score
+        self.sense = sense
+        self.read_name = read_name
+        self.linear = linear
+        self.unspliced = unspliced
+        
+        self.exon_starts = [self.start,] + [l[1] for l in self.linear]
+        self.exon_ends = [l[0] for l in self.linear] + [self.end,]
+        self.exon_starts_set = set(self.exon_starts)
+        self.exon_ends_set = set(self.exon_ends)
+
+        self.exon_bound_lookup = {}
+        for start, end in zip(self.exon_starts, self.exon_ends):
+            self.exon_bound_lookup[start] = end
+            self.exon_bound_lookup[end] = start
+
 
 class ReconstructedCircIsoforms(object):
     def __init__(self, multi_event_source):
         self.multi_events = defaultdict(list)
         self.logger = logging.getLogger("ReconstructedCircIsoforms")
 
-        class MultiEvent(object):
-            pass
-
-        def to_coords(column):
-            for elem in column.split(','):
-                try:
-                    start, end = elem.split('-')
-                    start = int(start)
-                    end = int(end)
-                except ValueError:
-                    pass
-                else:
-                    yield (start, end)
-            
-        for line in multi_event_source:
-            if line.startswith("#"):
-                continue
-            
-            parts = line.rstrip().split('\t')
-            #print parts
-            
-            me = MultiEvent()
-            
-            me.chrom = parts[0]
-            me.start = int(parts[1])
-            me.end = int(parts[2])
-            me.name = parts[3]
-            me.score = parts[4]
-            me.sense = parts[5]
-            me.read_name = parts[6]
-
-            me.linear = set(to_coords(parts[7]))
-            me.unspliced = set(to_coords(parts[9]))
-            me.exon_starts = [me.start,] + [l[1] for l in me.linear]
-            me.exon_ends = [l[0] for l in me.linear] + [me.end,]
-            me.exon_starts_set = set(me.exon_starts)
-            me.exon_ends_set = set(me.exon_ends)
-
-            me.exon_bound_lookup = {}
-            for start, end in zip(me.exon_starts, me.exon_ends):
-                me.exon_bound_lookup[start] = end
-                me.exon_bound_lookup[end] = start
-            
+        for me in multi_event_source:
             self.multi_events[me.name].append(me)
 
 
@@ -422,6 +402,50 @@ class ReconstructedCircIsoforms(object):
             #print name
             yield self.reconstruct(name)
 
-for isoform_set in ReconstructedCircIsoforms(file(args[0])):
+def multi_events_from_file(fname):
+    def to_coords(column):
+        for elem in column.split(','):
+            try:
+                start, end = elem.split('-')
+                start = int(start)
+                end = int(end)
+            except ValueError:
+                pass
+            else:
+                yield (start, end)
+        
+    for line in file(fname):
+        if line.startswith("#"):
+            continue
+        
+        parts = line.rstrip().split('\t')
+        #print parts
+        
+        chrom, start, end, name, score, sense = parts[:6]
+        me = MultiEvent(
+            name, chrom, int(start), int(end), float(score), sense, 
+            read_name=parts[6], 
+            linear = set(to_coords(parts[7])), 
+            unspliced = set(to_coords(parts[9]))
+        )
+        yield me
+    
+
+def test_double_exon():
+    #def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
+    multi_events = [
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
+        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
+    ]
+    for isoform_set in ReconstructedCircIsoforms(file(args[0])):
+        for iso in isoform_set:
+            print iso
+    
+        
+for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
     for iso in isoform_set:
         print iso
