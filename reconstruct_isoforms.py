@@ -27,7 +27,8 @@ parser = optparse.OptionParser(usage=usage)
 parser.add_option("","--known-exons",dest="known_exons",default="",help="GTF file with known exons")
 #parser.add_option("","--min-segment",dest="min_seg",type=int,default=13,help="minimum size of span to be detectable/~BWA MEM min. segment size (default=13)")
 #parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
-#parser.add_option("","--fpk",dest="fpk",action="store_true",default=False, help="if set, --n-frags is interpreted as frags-per-kilobase")
+parser.add_option("","--self-test",dest="self_test",action="store_true",default=False, help="if set, perform unit-tests instead of running on input data")
+parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 #parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 #parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 parser.add_option("-o","--output",dest="output",default="reconstruct",help="path, where to store the output (default='./reconstruct')")
@@ -53,7 +54,7 @@ class ExonStorage(object):
     """
     def __init__(self):
         self.sorted_exon_bounds = defaultdict(list)
-        self.exons_by_coord = defaultdict( lambda : defaultdict(list) )
+        self.exons_by_coord = defaultdict( lambda : defaultdict(set) )
         self.logger = logging.getLogger("ExonStorage")
 
     def load_gtf(self,fname):
@@ -71,36 +72,46 @@ class ExonStorage(object):
             exon_bounds[strand].add( start )
             exon_bounds[strand].add( end )
             
-            self.exons_by_coord[strand][start].append( (start, end) )
-            self.exons_by_coord[strand][end].append( (start, end) )
+            #self.exons_by_coord[strand][start].add( (start, end) )
+            #self.exons_by_coord[strand][end].add( (start, end) )
                
         for strand, eb in exon_bounds.items():
             self.sorted_exon_bounds[strand] = sorted(eb)
+            
+        #for strand in self.exons_by_coord.keys():
+            #for coord, exon_list in self.exons_by_coord[strand].keys():
+                #self.exons_by_coord[strand][coord] = sorted(set(exon_list))
         
         self.logger.info("done, loaded and sorted {0} exons".format(N))
+
+
+    def add(self, chrom, start, end, sense):
+        strand = chrom+sense
+        eb = (start, end)
+        
+        #sorted_coords = self.exons_by_coord[strand]
+        #sorted_coords[start].add( eb )
+        #sorted_coords[end].add( eb )
+        
+        sorted_bounds = self.sorted_exon_bounds[strand]
+        sorted_bounds.insert(bisect.bisect_left(sorted_bounds, eb ), eb )
+        
 
     def get_intervening_exons(self, chrom, start, end, sense):
         chrom_bounds = self.sorted_exon_bounds[chrom+sense]
         
-        start_i = bisect.bisect_left(chrom_bounds, start)
-        end_i = bisect.bisect_left(chrom_bounds, end)
+        start_i = bisect.bisect_left(chrom_bounds, (start, start) )
+        end_i = bisect.bisect_right(chrom_bounds, (end, end) )
         
         iv_bounds = chrom_bounds[start_i:end_i]
-        exon_dict = self.exons_by_coord[chrom+sense]
-        exons = set()
-
-        for pos in iv_bounds:
-            exons |= set(exon_dict[pos])
-        
-        return sorted(exons)
-
+        return iv_bounds
     
 known_exons = ExonStorage()
 if options.known_exons:
     known_exons.load_gtf(options.known_exons)
 
 class SupportedCircRNA(CircRNA):
-    def __init__(self, name, chrom, sense, exon_starts, exon_ends, min_exon_overlap=.85, **kwargs):
+    def __init__(self, name, chrom, sense, exon_starts, exon_ends, min_exon_overlap=.75, **kwargs):
         super(SupportedCircRNA,self).__init__(name, chrom, sense, exon_starts, exon_ends, (exon_starts[0],exon_starts[0]), **kwargs)
         
         self.logger = logging.getLogger("SupportedCircRNA")
@@ -154,6 +165,22 @@ class SupportedCircRNA(CircRNA):
         new_exon_ends.insert(end_i, left)
         
         return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+    
+    def remove_intron_overlapping(self, left, right):
+        #self.logger.debug("remove_intron_overlapping(): initial exon_starts={0} exon_ends={1}".format(self.exon_starts, self.exon_ends) )
+        start_i = max(bisect.bisect_left(self.exon_starts, right),1)
+        end_i = min(bisect.bisect_left(self.exon_ends, left)+1,self.exon_count-1)
+        #self.logger.debug("remove_intron_overlapping(): start_i={0} end_i={1}".format(start_i, end_i) )
+        
+        drop_left= self.exon_ends[start_i-1]
+        drop_right= self.exon_starts[end_i]
+        #self.logger.debug("remove_intron_overlapping(): drop_left={0} drop_right={1}".format(drop_left, drop_right) )
+        
+        new_exon_starts = list(self.exon_starts[:start_i]) + list(self.exon_starts[end_i+1:])
+        new_exon_ends = list(self.exon_ends[:start_i-1]) + list(self.exon_ends[end_i:])
+        
+        #self.logger.debug("remove_intron_overlapping(): new exon_starts={0} exon_ends={1}".format(new_exon_starts, new_exon_ends) )
+        return SupportedCircRNA("{0}_drop_intron_{1}-{2}".format(self.name, drop_left, drop_right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
         
     def adjust_exon_start(self, left, right):
         new_exon_starts = list(self.exon_starts)
@@ -212,7 +239,7 @@ class SupportedCircRNA(CircRNA):
             # allow a little bit of misaligned coverage (default=15%), so max-score is 0.85 * L
             exon_score += min(self.min_exon_overlap*L, overlap )
             
-        #self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
+        self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
         
         if max_exon_score:
             return 0.75 * junc_ratio + 0.25 * exon_score/max_exon_score
@@ -245,8 +272,8 @@ class MultiEvent(object):
         self.score = score
         self.sense = sense
         self.read_name = read_name
-        self.linear = linear
-        self.unspliced = unspliced
+        self.linear = set(linear)
+        self.unspliced = set(unspliced)
         
         self.exon_starts = [self.start,] + [l[1] for l in self.linear]
         self.exon_ends = [l[0] for l in self.linear] + [self.end,]
@@ -260,13 +287,15 @@ class MultiEvent(object):
 
 
 class ReconstructedCircIsoforms(object):
-    def __init__(self, multi_event_source):
+    def __init__(self, multi_event_source, known_exon_storage = known_exons):
         self.multi_events = defaultdict(list)
         self.logger = logging.getLogger("ReconstructedCircIsoforms")
-
+        self.known_exon_storage = known_exon_storage
         for me in multi_event_source:
             self.multi_events[me.name].append(me)
 
+        # TODO: percent spliced in metric output
+        self.psi = {}
 
     def reconstruct(self,circname):
         if not circname in self.multi_events:
@@ -277,7 +306,7 @@ class ReconstructedCircIsoforms(object):
         
         current_exons_by_bound = defaultdict(list)
 
-        known_bounds = np.array(known_exons.get_intervening_exons(chrom, start, end, sense))
+        known_bounds = np.array(self.known_exon_storage.get_intervening_exons(chrom, start, end, sense))
         if len(known_bounds):
             for start, end in known_bounds:
                 current_exons_by_bound[start].append( (start, end) )
@@ -299,7 +328,7 @@ class ReconstructedCircIsoforms(object):
 
         all_multi_events = self.multi_events[circname]
         self.logger.debug("processing {0} multi events".format(len(all_multi_events)) )
-        
+        self.logger.debug("initial isoform: '{0}'".format(isoforms[0]) )
         # compute a square support matrix (including junctions and coverage) 
         # between reads and isoforms to:
         # a) identify the best matching isoform to start with
@@ -328,7 +357,7 @@ class ReconstructedCircIsoforms(object):
             best = isoforms[j]
             logger.debug("best matched isoform {0}".format(best) )
             
-            self.logger.debug("selected incompatible me {0} and best-matched isoform {1} at compatibility_score {2}".format(i,j, matrix[j][i]) )
+            self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.name) )
             
             # first take care of completely unknown junctions
             for left, right in (me.linear - best.junctions):
@@ -432,20 +461,43 @@ def multi_events_from_file(fname):
     
 
 def test_double_exon():
-    #def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
+    #print "running self-test 'double_exon'"
+    ##def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
+    #multi_events = [
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
+        #MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
+    #]
+    #for isoform_set in ReconstructedCircIsoforms(multi_events):
+        #for iso in isoform_set:
+            #print iso
+    
+    print "running self-test 'known_double_exon_intron_retention'"
+    test_exons = ExonStorage()
+    test_exons.add('chrNA', 10, 30, '+')
+    test_exons.add('chrNA', 70, 100, '+')
+
     multi_events = [
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(20,50)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(30,70)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(35,85)]),
+        MultiEvent("test_known_double_ir", "chrNA", 10, 100, 1, '+', read_name='test2_IR', linear = [], unspliced = [(40,90)]),
     ]
-    for isoform_set in ReconstructedCircIsoforms(file(args[0])):
+    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
         for iso in isoform_set:
             print iso
+
+
     
-        
-for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
-    for iso in isoform_set:
-        print iso
+if options.self_test:
+    test_double_exon()
+    
+else:
+    for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
+        for iso in isoform_set:
+            print iso
