@@ -26,8 +26,7 @@ parser = optparse.OptionParser(usage=usage)
 #parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--known-exons",dest="known_exons",default="",help="GTF file with known exons")
 parser.add_option("","--max-isoforms",dest="max_isoforms",type=int,default=10,help="maximal number of candidate isoforms to investigate (default=10)")
-parser.add_option("","--max-size",dest="max_size",type=int,default=100,help="maximal size of genomic region to investigate in kb, to prevent excessive RAM usage (default=100kb)")
-parser.add_option("","--max-exon-size",dest="max_exon_size",type=int,default=10000,help="maximal size of an exon in nt to prevent excessive RAM usage (default=10000)")
+parser.add_option("","--max-size",dest="max_size",type=int,default=500,help="maximal size of genomic region to investigate in kb, to prevent excessive RAM usage (default=500kb)")
 #parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--self-test",dest="self_test",action="store_true",default=False, help="if set, perform unit-tests instead of running on input data")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
@@ -89,16 +88,9 @@ class ExonStorage(object):
             exon_bounds[strand].add( start )
             exon_bounds[strand].add( end )
             
-            #self.exons_by_coord[strand][start].add( (start, end) )
-            #self.exons_by_coord[strand][end].add( (start, end) )
-               
         for strand, eb in exon_bounds.items():
             self.sorted_exon_bounds[strand] = sorted(eb)
             
-        #for strand in self.exons_by_coord.keys():
-            #for coord, exon_list in self.exons_by_coord[strand].keys():
-                #self.exons_by_coord[strand][coord] = sorted(set(exon_list))
-        
         self.logger.info("done, loaded and sorted {0} exons".format(N))
 
 
@@ -106,13 +98,9 @@ class ExonStorage(object):
         strand = chrom+sense
         eb = (start, end)
         
-        #sorted_coords = self.exons_by_coord[strand]
-        #sorted_coords[start].add( eb )
-        #sorted_coords[end].add( eb )
-        
         sorted_bounds = self.sorted_exon_bounds[strand]
         sorted_bounds.insert(bisect.bisect_left(sorted_bounds, eb ), eb )
-        
+
 
     def get_intervening_exons(self, chrom, start, end, sense):
         chrom_bounds = self.sorted_exon_bounds[chrom+sense]
@@ -133,53 +121,50 @@ class SupportedCircRNA(CircRNA):
         
         self.logger = logging.getLogger("SupportedCircRNA")
         self.min_exon_overlap = min_exon_overlap
-        self.exonic_map = {}
         self.junctions = set([ (min(left, right), max(left, right)) for left, right in self.intron_bounds])
         self.exon_starts_set = set(self.exon_starts) 
         self.exon_ends_set = set(self.exon_ends)
         self.reset_counts()
 
-        for i,(start,end) in enumerate(self.exon_bounds):
-            if (end - start) > options.max_exon_size:
-                self.logger.warning("exon{0} of circRNA {1} is {2} kb, exceeding --max-exon-size. Disabling exonic_map".format(i, name, (end-start)/1000.) )
-            else:
-                for x in xrange(start,end):
-                    self.exonic_map[x] = i
-
     def reset_counts(self):
         self.exonic_support = defaultdict(int)
         self.junction_support = defaultdict(int)
         
-    def splice_support(self,start,end, count=True):
+    def splice_support(self,start,end):
         if not (start,end) in self.junctions:
             return False
-        
-        if count:
-            self.junction_support[(start, end)] += 1
-            self.exonic_support[self.exonic_map[start-1]] += 1
-            self.exonic_support[self.exonic_map[end]] += 1
-        
-        return True
+        else:        
+            return True
 
-    def exon_support(self,start,end, count=True):
+    def exon_support(self,start,end):
         intersect = self.cut(start,end)
         
         if intersect.spliced_length < (end-start) * self.min_exon_overlap:
             return False
-        
-        if count:
-            for x in xrange(start,end):
-                if x in self.exonic_map:
-                    self.exonic_support[self.exonic_map[x]] += 1
-                    break
-
-        return True
+        else:
+            return True
 
     def insert_new_intron(self, left, right):
-        new_exon_starts = sorted(list(self.exon_starts) + [right])
-        new_exon_ends = sorted(list(self.exon_ends) + [left])
+        # check if intron collides with already present intron that needs to be removed first
+        middle = left + (right-left)/2
+        i = min(bisect.bisect_left(self.exon_ends, middle), self.exon_count-2)
+        closest_intron_left = self.exon_ends[i]
+        closest_intron_right = self.exon_starts[i+1]
+
+        overlap_start = max(closest_intron_left, left)
+        overlap_end = min(closest_intron_right, right)
+        overlap = overlap_end - overlap_start
+        
+        if overlap > 0:
+            self.logger.warning("new intron {left}-{right} overlaps already present intron {closest_intron_left}-{closest_intron_right}. Removing this one first!".format(**locals()) )
+            chain = self.remove_intron_overlapping(middle, middle+1)
+        else:
+            chain = self
+        
+        new_exon_starts = sorted(list(chain.exon_starts) + [right])
+        new_exon_ends = sorted(list(chain.exon_ends) + [left])
        
-        return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+        return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(chain.name, left, right), chain.chrom, chain.sense, new_exon_starts, new_exon_ends)
     
     def remove_intron_overlapping(self, left, right):
         #self.logger.debug("remove_intron_overlapping(): initial exon_starts={0} exon_ends={1}".format(self.exon_starts, self.exon_ends) )
@@ -270,22 +255,6 @@ class SupportedCircRNA(CircRNA):
             return junc_ratio
         
         
-    @property
-    def support_summary(self):
-        #print self.junction_support
-        #print self.exonic_support
-        #print self.exon_count
-        supported_junctions = len(self.junction_support.keys())
-        if self.junctions:
-            junc_fraction = supported_junctions / float(len(self.junctions))
-        else:
-            junc_fraction = "n/a"
-        
-        supported_exons = len(self.exonic_support.keys())
-        exon_fraction = supported_exons / float(self.exon_count)
-
-        return "junc_fraction={0} exon_fraction={1}".format(junc_fraction, exon_fraction)
-
 class MultiEvent(object):
     def __init__(self, name, chrom, start, end, score, sense, read_name = "readname", linear = [], unspliced = []):
         self.name = name
@@ -398,11 +367,11 @@ class ReconstructedCircIsoforms(object):
                 if (left in best.exon_ends_set) and (right in best.exon_starts_set):
                     self.logger.info("  discovered skipped exon {left}-{right}".format(left=left, right=right))
                     new_iso = best.skip_exons_between(left, right)
-                    assert new_iso.splice_support(left, right, count=False)
+                    assert new_iso.splice_support(left, right)
                 else:
                     self.logger.info("  discovered new intron {left}-{right}".format(**locals()))
                     new_iso = best.insert_new_intron(left, right)
-                    assert new_iso.splice_support(left, right, count=False)
+                    assert new_iso.splice_support(left, right)
 
                 best = new_iso
 
@@ -410,15 +379,15 @@ class ReconstructedCircIsoforms(object):
             for start in (me.exon_starts_set - best.exon_starts_set):
                 end = me.exon_bound_lookup[start]
                 self.logger.info("  discovered alternative exon start {left}".format(left=left))
-                new_iso = best.adjust_exon_start(start, end, count=False)
-                assert new_iso.splice_support(start, end, count=False)
+                new_iso = best.adjust_exon_start(start, end)
+                assert new_iso.splice_support(start, end)
                 best = new_iso
 
             for end in (me.exon_ends_set - best.exon_ends_set):
                 start = me.exon_bound_lookup[end]
                 self.logger.info("  discovered alternative exon end {left}".format(right=right))
-                new_iso = best.adjust_exon_end(start, end, count=False)
-                assert new_iso.splice_support(start, end, count=False)
+                new_iso = best.adjust_exon_end(start, end)
+                assert new_iso.splice_support(start, end)
                 best = new_iso
 
             # finally, if there is unspliced coverage in an intronic region, remove this intron
