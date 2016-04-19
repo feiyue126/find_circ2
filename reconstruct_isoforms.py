@@ -33,7 +33,7 @@ parser.add_option("","--debug",dest="debug",default=False,action="store_true",he
 #parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 #parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 parser.add_option("-o","--output",dest="output",default="reconstruct",help="path, where to store the output (default='./reconstruct')")
-parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
+parser.add_option("","--stdout",dest="stdout",default=None,choices=['log','psi','iso'],help="use to direct chosen type of output (log, psi, iso) to stdout instead of file")
 
 options,args = parser.parse_args()
 
@@ -57,11 +57,14 @@ psi_file  = file(os.path.join(options.output,"psi.bed"),"w")
 
 # redirect output to stdout, if requested
 if options.stdout:
-    varname = "{0}_file".format(options.stdout)
-    out_file = globals()[varname]
-    out_file.write('# redirected to stdout\n')
-    logger.info('redirected {0} to stdout'.format(options.stdout))
-    globals()[varname] = sys.stdout
+    if options.stdout == 'log':
+        logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    else:
+        varname = "{0}_file".format(options.stdout)
+        out_file = globals()[varname]
+        out_file.write('# redirected to stdout\n')
+        logger.info('redirected {0} to stdout'.format(options.stdout))
+        globals()[varname] = sys.stdout
 
 
 class ExonStorage(object):
@@ -156,15 +159,26 @@ class SupportedCircRNA(CircRNA):
         overlap = overlap_end - overlap_start
         
         if overlap > 0:
-            self.logger.warning("new intron {left}-{right} overlaps already present intron {closest_intron_left}-{closest_intron_right}. Removing this one first!".format(**locals()) )
-            chain = self.remove_intron_overlapping(middle, middle+1)
+            self.logger.warning("new intron {left}-{right} overlaps already present intron {closest_intron_left}-{closest_intron_right}. Adjusting exon {i} bounds instead".format(**locals()) )
+            
+            #print "before adjust"
+            #print self
+            #print "adjusting {0} to {1}".format(self.exon_ends[i], right)
+            chain = self.adjust_exon_start(self.exon_ends[i], right)
+            #print "after first adjust"
+            #print chain
+            #print "adjusting {0} to {1}".format(self.exon_starts[i], left)
+            chain = chain.adjust_exon_end(left, self.exon_starts[i])
+            #print "after second adjust"
+            #print chain
+            chain.name = "{0}_adjusted_intron_{1}-{2}".format(chain.name, left, right)
+            #print "spliced_length", chain.spliced_length
+            return chain
         else:
-            chain = self
+            new_exon_starts = sorted(list(self.exon_starts) + [right])
+            new_exon_ends = sorted(list(self.exon_ends) + [left])
         
-        new_exon_starts = sorted(list(chain.exon_starts) + [right])
-        new_exon_ends = sorted(list(chain.exon_ends) + [left])
-       
-        return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(chain.name, left, right), chain.chrom, chain.sense, new_exon_starts, new_exon_ends)
+            return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
     
     def remove_intron_overlapping(self, left, right):
         #self.logger.debug("remove_intron_overlapping(): initial exon_starts={0} exon_ends={1}".format(self.exon_starts, self.exon_ends) )
@@ -188,7 +202,7 @@ class SupportedCircRNA(CircRNA):
         
         # find exon by end coordinate
         i = new_exon_ends.index(left)
-        new_exon_starts[i] = right
+        new_exon_starts[i+1] = right
         
         return SupportedCircRNA("{0}_adj_start_{1}:{2}".format(self.name, i, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
 
@@ -365,11 +379,11 @@ class ReconstructedCircIsoforms(object):
             # first take care of completely unknown junctions
             for left, right in (me.linear - best.junctions):
                 if (left in best.exon_ends_set) and (right in best.exon_starts_set):
-                    self.logger.info("  discovered skipped exon {left}-{right}".format(left=left, right=right))
+                    self.logger.debug("  discovered skipped exon {left}-{right}".format(left=left, right=right))
                     new_iso = best.skip_exons_between(left, right)
                     assert new_iso.splice_support(left, right)
                 else:
-                    self.logger.info("  discovered new intron {left}-{right}".format(**locals()))
+                    self.logger.debug("  discovered new intron {left}-{right}".format(**locals()))
                     new_iso = best.insert_new_intron(left, right)
                     assert new_iso.splice_support(left, right)
 
@@ -378,14 +392,14 @@ class ReconstructedCircIsoforms(object):
             # next, take care of alternative 5' and 3' end positions.
             for start in (me.exon_starts_set - best.exon_starts_set):
                 end = me.exon_bound_lookup[start]
-                self.logger.info("  discovered alternative exon start {left}".format(left=left))
+                self.logger.debug("  discovered alternative exon start {left}".format(left=left))
                 new_iso = best.adjust_exon_start(start, end)
                 assert new_iso.splice_support(start, end)
                 best = new_iso
 
             for end in (me.exon_ends_set - best.exon_ends_set):
                 start = me.exon_bound_lookup[end]
-                self.logger.info("  discovered alternative exon end {left}".format(right=right))
+                self.logger.debug("  discovered alternative exon end {left}".format(right=right))
                 new_iso = best.adjust_exon_end(start, end)
                 assert new_iso.splice_support(start, end)
                 best = new_iso
@@ -394,7 +408,7 @@ class ReconstructedCircIsoforms(object):
             for start, end in me.unspliced:
                 if not best.exon_support(start,end):
                     #print "Need new exon or retained intron"
-                    self.logger.info("  removing intron with unspliced coverage from {start}-{end}".format(start=start, end=end) )
+                    self.logger.debug("  removing intron with unspliced coverage from {start}-{end}".format(start=start, end=end) )
                     best = best.remove_intron_overlapping(start, end)
 
             new_compat = best.compatibility_score(me)
@@ -465,7 +479,7 @@ def multi_events_from_file(fname):
         yield me
     
 
-def test_reconstruction():
+def test_double_exon():
     print "running self-test 'double_exon'"
     multi_events = [
         MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
@@ -479,6 +493,7 @@ def test_reconstruction():
         for iso in isoform_set:
             print iso
     
+def test_triple_exon_IR():
     print "running self-test 'known_triple_exon_intron_retention'"
     test_exons = ExonStorage()
     test_exons.add('chrNA', 10, 30, '+')
@@ -498,6 +513,7 @@ def test_reconstruction():
         for iso in isoform_set:
             print iso
 
+def test_skipped_exon():
     print "running self-test 'skipped_exon'"
     test_exons = ExonStorage()
     test_exons.add('chrNA', 10, 30, '+')
@@ -514,10 +530,30 @@ def test_reconstruction():
         for iso in isoform_set:
             print iso
 
+def test_exon_adjust():
+    print "running self-test 'exon_adjust'"
+    test_exons = ExonStorage()
+    test_exons.add('chrNA', 10, 30, '+')
+    test_exons.add('chrNA', 70, 100, '+')
+    test_exons.add('chrNA', 150, 200, '+')
 
-    
+    multi_events = [
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron1', linear = [(30,70)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron2', linear = [(100,150)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon1_adjust', linear = [(120,150)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_adjust', linear = [(100,155)]),
+        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_both_adjust', linear = [(90,157)]),
+    ]
+    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+        for iso in isoform_set:
+            print iso
+
+
 if options.self_test:
-    test_reconstruction()
+    #test_double_exon()
+    #test_triple_exon_IR()
+    #test_skipped_exon()
+    test_exon_adjust()
     
 else:
     for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
