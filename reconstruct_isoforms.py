@@ -544,7 +544,6 @@ class TestReconstruction(unittest.TestCase):
         return self.assertEqual(reconstruct, expect)
 
     def test_exon_adjust(self):
-        print "running self-test 'exon_adjust'"
         test_exons = ExonStorage()
         test_exons.add('chrNA', 10, 30, '+')
         test_exons.add('chrNA', 70, 100, '+')

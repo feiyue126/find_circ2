@@ -172,12 +172,12 @@ The multievent output allows to attempt a reconstrucion of the multi-exonic stru
     # de novo reconstruction
     for SAMPLE in "${ce6_samples[@]}"
     do {
-            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv 2> run/${SAMPLE}/reconstruct.log > run/${SAMPLE}/reconstructed.ucsc &
+            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv -o run/${SAMPLE} &
     } done;
 
     for SAMPLE in "${hg19_samples[@]}"
     do {
-            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv 2> run/${SAMPLE}/reconstruct.log > run/${SAMPLE}/reconstructed.ucsc &
+            ../reconstruct_isoforms.py run/${SAMPLE}/multi_events.tsv -o run/${SAMPLE} &
     } done;
     
     # with prior knowledge of annotated exons
