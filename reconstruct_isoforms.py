@@ -8,30 +8,24 @@ __licence__ = "GPL"
 __email__ = "marvin.jens@mdc-berlin.de"
 
 from byo.gene_model import transcripts_from_UCSC, CircRNA, Transcript
-#from byo import rev_comp
 import os,sys
 import optparse
 import numpy as np
 import bisect
 import logging
+import unittest
 from collections import defaultdict
-#from gzip import GzipFile
 
 usage = """
    %prog [options] multi_events.tsv
 """
 
 parser = optparse.OptionParser(usage=usage)
-#parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
-#parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome FASTA file")
 parser.add_option("","--known-exons",dest="known_exons",default="",help="GTF file with known exons")
 parser.add_option("","--max-isoforms",dest="max_isoforms",type=int,default=10,help="maximal number of candidate isoforms to investigate (default=10)")
 parser.add_option("","--max-size",dest="max_size",type=int,default=500,help="maximal size of genomic region to investigate in kb, to prevent excessive RAM usage (default=500kb)")
-#parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="number of fragments to simulate (default=100)")
 parser.add_option("","--self-test",dest="self_test",action="store_true",default=False, help="if set, perform unit-tests instead of running on input data")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
-#parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
-#parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
 parser.add_option("-o","--output",dest="output",default="reconstruct",help="path, where to store the output (default='./reconstruct')")
 parser.add_option("","--stdout",dest="stdout",default=None,choices=['log','psi','iso'],help="use to direct chosen type of output (log, psi, iso) to stdout instead of file")
 
@@ -46,6 +40,7 @@ if options.debug:
     lvl = logging.DEBUG
 else:
     lvl = logging.INFO
+
 FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
 logging.basicConfig(level=lvl,format=FORMAT,filename=os.path.join(options.output,"reconstruct.log"),filemode='w')
 logger = logging.getLogger('reconstruct_isoforms.py')
@@ -96,14 +91,12 @@ class ExonStorage(object):
             
         self.logger.info("done, loaded and sorted {0} exons".format(N))
 
-
     def add(self, chrom, start, end, sense):
         strand = chrom+sense
         eb = (start, end)
         
         sorted_bounds = self.sorted_exon_bounds[strand]
         sorted_bounds.insert(bisect.bisect_left(sorted_bounds, eb ), eb )
-
 
     def get_intervening_exons(self, chrom, start, end, sense):
         chrom_bounds = self.sorted_exon_bounds[chrom+sense]
@@ -114,6 +107,7 @@ class ExonStorage(object):
         iv_bounds = chrom_bounds[start_i:end_i]
         return iv_bounds
     
+
 known_exons = ExonStorage()
 if options.known_exons:
     known_exons.load_gtf(options.known_exons)
@@ -413,7 +407,7 @@ class ReconstructedCircIsoforms(object):
 
             new_compat = best.compatibility_score(me)
             if new_compat < 1. or best.spliced_length == 0:
-                self.logger.warning("  unsatisfyable multievent. Ignoring {0}".format(me))
+                self.logger.warning("  unsatisfyable multievent {1}. Ignoring {0}".format(me, new_compat))
                 if best.spliced_length == 0:
                     self.logger.warning("  even worse, it produced a zero-length candidate!")
                 all_multi_events.remove(me)
@@ -479,83 +473,108 @@ def multi_events_from_file(fname):
         yield me
     
 
-def test_double_exon():
-    print "running self-test 'double_exon'"
-    multi_events = [
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
-        MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
-    ]
-    for isoform_set in ReconstructedCircIsoforms(multi_events):
-        for iso in isoform_set:
-            print iso
+class TestReconstruction(unittest.TestCase):
     
-def test_triple_exon_IR():
-    print "running self-test 'known_triple_exon_intron_retention'"
-    test_exons = ExonStorage()
-    test_exons.add('chrNA', 10, 30, '+')
-    test_exons.add('chrNA', 70, 100, '+')
-    test_exons.add('chrNA', 150, 200, '+')
+    def test_double_exon(self):
+        multi_events = [
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon1', linear = [(30,70)], unspliced = [(10,30)]),
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_bound_cov_exon2', linear = [(30,70)], unspliced = [(70,100)]),
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon1', linear = [(30,70)], unspliced = [(8,32)]),
+            MultiEvent("test_double_exon", "chrNA", 10, 100, 1, '+', read_name='test1_exceed_cov_exon2', linear = [(30,70)], unspliced = [(65,102)]),
+        ]
+        expect = set([
+            ('chrNA', '+', (10, 70), (30, 100)),
+        ])
+        for isoform_set in ReconstructedCircIsoforms(multi_events):
+            reconstruct = set([iso.key for iso in isoform_set])
 
-    multi_events = [
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(100,150)], unspliced = [(71,99)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron2', linear = [(30,70)], unspliced = [(90,120)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron1', linear = [(100,150)], unspliced = [(30,70)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_introns1_2', linear = [], unspliced = [(35,130)]),
-        MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR', linear = [], unspliced = [(40,90)]),
-    ]
-    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
-        for iso in isoform_set:
-            print iso
+        return self.assertEqual(reconstruct, expect)
 
-def test_skipped_exon():
-    print "running self-test 'skipped_exon'"
-    test_exons = ExonStorage()
-    test_exons.add('chrNA', 10, 30, '+')
-    test_exons.add('chrNA', 70, 100, '+')
-    test_exons.add('chrNA', 150, 200, '+')
 
-    multi_events = [
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_complete_splice', linear = [(30,70),(100,150)], unspliced = [(71,99)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_skipped', linear = [(30,150)], unspliced = [(11,29)]),
-    ]
-    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
-        for iso in isoform_set:
-            print iso
+    def test_triple_exon_IR(self):
+        test_exons = ExonStorage()
+        test_exons.add('chrNA', 10, 30, '+')
+        test_exons.add('chrNA', 70, 100, '+')
+        test_exons.add('chrNA', 150, 200, '+')
 
-def test_exon_adjust():
-    print "running self-test 'exon_adjust'"
-    test_exons = ExonStorage()
-    test_exons.add('chrNA', 10, 30, '+')
-    test_exons.add('chrNA', 70, 100, '+')
-    test_exons.add('chrNA', 150, 200, '+')
+        multi_events = [
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(100,150)], unspliced = [(71,99)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron2', linear = [(30,70)], unspliced = [(90,120)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_intron1', linear = [(100,150)], unspliced = [(30,70)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR_introns1_2', linear = [], unspliced = [(35,130)]),
+            MultiEvent("test_known_triple_ir", "chrNA", 10, 200, 1, '+', read_name='test2_IR', linear = [], unspliced = [(40,90)]),
+        ]
+        expect = set([
+            ('chrNA', '+', (10, 150), (100, 200)),
+            ('chrNA', '+', (10, 70), (30, 200)),
+            ('chrNA', '+', (10,), (200,)),
+        ])
+        for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+            reconstruct = set([iso.key for iso in isoform_set])
+            #print reconstruct
+        
+        return self.assertEqual(reconstruct, expect)
 
-    multi_events = [
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron1', linear = [(30,70)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron2', linear = [(100,150)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon1_adjust', linear = [(120,150)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_adjust', linear = [(100,155)]),
-        MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_both_adjust', linear = [(90,157)]),
-    ]
-    for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
-        for iso in isoform_set:
-            print iso
+    def test_skipped_exon(self):
+        test_exons = ExonStorage()
+        test_exons.add('chrNA', 10, 30, '+')
+        test_exons.add('chrNA', 70, 100, '+')
+        test_exons.add('chrNA', 150, 200, '+')
 
+        multi_events = [
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon1', linear = [(30,70)], unspliced = [(11,29)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_cov_exon2', linear = [(30,70)], unspliced = [(71,99)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_perfect_complete_splice', linear = [(30,70),(100,150)], unspliced = [(71,99)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_skipped', linear = [(30,150)], unspliced = [(11,29)]),
+        ]
+        for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+            reconstruct = set([iso.key for iso in isoform_set])
+
+        expect = set([
+            ('chrNA', '+', (10, 70, 150), (30, 100, 200)),
+            ('chrNA', '+', (10, 150), (30, 200)),
+        ])
+        for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+            reconstruct = set([iso.key for iso in isoform_set])
+
+        return self.assertEqual(reconstruct, expect)
+
+    def test_exon_adjust(self):
+        print "running self-test 'exon_adjust'"
+        test_exons = ExonStorage()
+        test_exons.add('chrNA', 10, 30, '+')
+        test_exons.add('chrNA', 70, 100, '+')
+        test_exons.add('chrNA', 150, 200, '+')
+
+        multi_events = [
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron1', linear = [(30,70)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_intron2', linear = [(100,150)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon1_adjust', linear = [(120,150)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_exon2_adjust', linear = [(100,155)]),
+            MultiEvent("test_known_triple_AS", "chrNA", 10, 200, 1, '+', read_name='test2_both_adjust', linear = [(90,157)]),
+        ]
+        
+        expect = set([
+            ('chrNA', '+', (10, 70, 157), (30, 90, 200)),
+            ('chrNA', '+', (10, 70, 155), (30, 100, 200)),
+            ('chrNA', '+', (10, 70, 150), (30, 120, 200)),
+            ('chrNA', '+', (10, 70, 150), (30, 100, 200)),
+        ])
+        for isoform_set in ReconstructedCircIsoforms(multi_events, known_exon_storage=test_exons):
+            reconstruct = set([iso.key for iso in isoform_set])
+
+        return self.assertEqual(reconstruct, expect)
 
 if options.self_test:
-    #test_double_exon()
-    #test_triple_exon_IR()
-    #test_skipped_exon()
-    test_exon_adjust()
-    
-else:
+    # clear commandline so unittest does not get confused
+    sys.argv = sys.argv[:1]
+    unittest.main()
+
+if __name__ == "__main__":
     for isoform_set in ReconstructedCircIsoforms(multi_events_from_file(args[0])):
         for iso in isoform_set:
             iso_file.write(str(iso) + '\n')
