@@ -390,7 +390,7 @@ parser.add_option("-o","--output",dest="output",default="find_circ_run",help="wh
 parser.add_option("-q","--silent",dest="silent",default=False,action="store_true",help="suppress any normal output to stdout. Automatically switched on when using --stdout redirection")
 parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
-parser.add_option("","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
+parser.add_option("","--min-uniq-qual",dest="min_uniq_qual",type=int,default=2,help="minimal uniqness for anchor alignments to consider (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=15,help="anchor size (default=15)")
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside within a segment (default=2)")
 parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in segment extensions (default=2)")
@@ -482,8 +482,6 @@ if options.bam:
 else:
     bam_out = None
 
-minmapscore = options.asize * (-2)
-
                  
 class Hit(object):
     def __init__(self,name,splice):
@@ -557,8 +555,8 @@ class Hit(object):
             # Alignment Score - Secondbest hit score            
             aopt = dict(A.tags)
             bopt = dict(B.tags)
-            qA = aopt.get('AS') - aopt.get('XS',minmapscore)
-            qB = bopt.get('AS') - bopt.get('XS',minmapscore)
+            qA = aopt.get('AS') - aopt.get('XS',0)
+            qB = bopt.get('AS') - bopt.get('XS',0)
 
             if qA and qB:
                 # both anchors from the *same read* align uniquely
@@ -807,6 +805,19 @@ class Splice(object):
         else:
             return (self.chrom,self.end,self.start,self.strand)
         
+        
+def uniqness(align):
+    """
+    Difference between reported alignment score (AS) and 
+    the next best hit's score (XS).
+    """
+    u = align.get_tag('AS')
+
+    if align.has_tag('XS'):
+        u -= align.get_tag('XS')
+
+    return u
+
 class JunctionSpan(object):
     def __init__(self,align_A,align_B,primary,q_start,q_end,weight):
         self.primary = primary
@@ -815,7 +826,10 @@ class JunctionSpan(object):
         self.q_start = q_start
         self.q_end = q_end
         self.weight = weight
-        
+        self.uniq_A = uniqness(align_A)
+        self.uniq_B = uniqness(align_B)
+        self.uniq = min(self.uniq_A, self.uniq_B)
+
         # TODO: fix, depending on mate orientation!
         if primary.is_reverse:
             self.strand = '-'
@@ -829,6 +843,10 @@ class JunctionSpan(object):
         full_read = primary.seq
         self.read_part = full_read[q_start:q_end]
     
+    @property
+    def is_uniq(self):
+        return self.uniq >= options.min_uniq_qual
+
     @property
     def is_backsplice(self):
         return self.dist < 0
@@ -866,7 +884,7 @@ class JunctionSpan(object):
         # record all possible breakpoints
         hits = []
         if options.debug:
-            print "readlen",L
+            print "readlen",L,"q_start/end",self.q_start, self.q_end
             print " "*2+read
             print " "*2+A.query[:-options.margin]
             print " "*(2+L-eff_a)+B.query[options.margin:]
@@ -1049,6 +1067,9 @@ class MateSegments(object):
         more segments.
         """
 
+        if options.debug:
+            print ">adjacent_segment_pairs() starting"
+
         if len(self.proper_segs) < 2:
             # unspliced read. Nothing to do
             return
@@ -1079,6 +1100,8 @@ class MateSegments(object):
         internal_starts = dict([( seg,aligned_start_from_cigar(seg) ) for seg in self.proper_segs])
         internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in self.proper_segs])
         
+        if options.debug:
+            print "internal_starts", internal_starts
         # sort by internal start position
         seg_by_seq = sorted(self.proper_segs, key = lambda seg: internal_starts[seg])
         
@@ -1156,6 +1179,8 @@ def parse_test_read(align_str, fix_marcel=False):
                 circ_juncs.add( (chrom, left, right, strand) )
                 spliced = True
                 end = left
+            else:
+                pass
 
         if not spliced and chrom:
             if options.stranded:
@@ -1268,6 +1293,13 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
     # record all observed backsplice events
     circ_coords = set()
     for junc_span in circ_junc_spans:
+        if options.debug:
+            print "> checking for circ-juncs"
+
+        if not junc_span.is_uniq:
+            N['circ_junc_not_unique'] += 1
+            continue
+            
         splices = junc_span.find_breakpoints()
 
         w = junc_span.weight
@@ -1316,6 +1348,10 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
     lin_incons = set()
     lin_coords = set()
     for junc_span in linear_junc_spans:
+        if not junc_span.is_uniq:
+            N['lin_junc_not_unique'] += 1
+            continue
+          
         splices = junc_span.find_breakpoints()
 
         w = junc_span.weight

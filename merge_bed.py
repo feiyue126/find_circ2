@@ -156,13 +156,16 @@ elif options.score:
     for pos in merge.keys():
         com = support[pos]
         comstr = "(%s)" % ",".join(com)
-        cols = [comstr]
+        rec_name = ",".join(set([by_name[name][pos][3] for name in com]))
+        cols = [rec_name]
+        
         for name in shorts:
             if not name in com:
                 cols.append("0")
             else:
                 cols.append(by_name[name][pos][4])
-
+                
+        cols.append(comstr)
         print "\t".join(cols)
     
 else:

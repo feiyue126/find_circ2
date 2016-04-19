@@ -33,6 +33,7 @@ parser.add_option("","--n-frags",dest="n_frags",type=int,default=100,help="numbe
 parser.add_option("","--fpk",dest="fpk",action="store_true",default=False, help="if set, --n-frags is interpreted as frags-per-kilobase")
 parser.add_option("","--frag-len",dest="frag_len",type=int,default=350,help="fragment length to simulate (default=350)")
 parser.add_option("","--read-len",dest="read_len",type=int,default=100,help="read length to simulate (default=100)")
+parser.add_option("","--seed",dest="seed",type=int,default=0,help="seed for pseudo random number generator (default=random)")
 parser.add_option("-o","--output",dest="output",default="simulation",help="path, where to store the output (default='./simulation')")
 parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi','test'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
 
@@ -70,6 +71,10 @@ if options.stdout:
     logger.info('redirected {0} to stdout'.format(options.stdout))
     globals()[varname] = sys.stdout
 
+# initialize random number generator
+if options.seed:
+    np.random.seed(options.seed)
+
 if options.system:
     import importlib
     system = importlib.import_module("byo.systems.{options.system}".format(**locals()))
@@ -92,10 +97,8 @@ def store_splices(data, dst, prefix="sim"):
         
         dst.write('\t'.join([str(o) for o in out]) + '\n')
     
-def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
+def test_str(mate, lin_juncs = {}, circ_juncs = {}, circ=None):
     splices = 0
-    lin_juncs = defaultdict(int)
-    circ_juncs = defaultdict(int)
     lin_detectable = defaultdict(int)
     parts = []
     lin_span = defaultdict(int)
@@ -104,8 +107,6 @@ def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
     ori = mate.start
     # always represent in + orientation of the chromosome!
     for i,(s,e) in enumerate(mate.exon_bounds):
-        #print s,e
-        #print circ.start, circ.end
         if i == 0:
             # first segment: yield origin
             parts.append("O:{chrom}:{ori}:{sense};M:{m}".format(chrom=mate.chrom, ori=ori, sense=mate.sense, m=e-s) )
@@ -117,43 +118,29 @@ def test_str(mate, rec_lin = {}, rec_circ = {}, circ=None):
             else:
                 parts.append("LS:{start}:{end};M:{m}".format(start=last_e - ori, end=s - ori, m=e-s) )
                 coord = (mate.chrom, last_e, s, mate.sense)
-                lin_juncs[ coord ] += 1
 
                 left, right = mate.exon_lengths[i-1:i+1]
-                
                 # record the number of nucleotides that span the junction
                 span = min(left, right)
                 lin_span[coord] = max(lin_span[coord], span)
-                
-                if span >= options.min_seg:
-                    lin_detectable[coord] += 1
-                    
-                splices +=1 
    
         last_s, last_e = s,e
 
+    for coord, span in lin_span.items():
+        if span >= options.min_seg:
+            lin_juncs[coord] += np.array([1,1])
+        else:
+            lin_juncs[coord] += np.array([1,0])
+            
     if mate.start == circ.start and mate.end == circ.end:
         parts.append("CS:{start}:{end};M:{m}".format(start=circ.start - ori, end=circ.end - ori, m=e-s) )
-        circ_juncs[ (mate.chrom, circ.start, circ.end, mate.sense) ] += 1
-        splices += 1
-    
-    if splices > 1:
-        w = 1./(splices-1)
-    else:
-        w = 1
-        
-    # store the counts
-    for coord in lin_juncs:
-        rec_lin[coord] += np.array([w, 1, lin_juncs[coord], lin_detectable[coord]])
-
-    for coord in circ_juncs:
         span = min(mate.exon_lengths[0], mate.exon_lengths[-1])
+        coord = (mate.chrom, circ.start, circ.end, mate.sense)
         if span >= options.min_seg:
-            detectable = 1
+            circ_juncs[coord] += np.array([1,1]) 
         else:
-            detectable = 0
-        rec_circ[coord] += np.array([w, 1, circ_juncs[coord], detectable])
-    
+            lin_juncs[coord] += np.array([1,0])
+            
     return ";".join(parts)
 
 def mutate(seq, rate):
@@ -171,13 +158,37 @@ def mutate(seq, rate):
     
     return "".join(seq)
 
+def test_mate(mate, circ):
+    """
+    tests if the exon boundaries of the mate make sense
+    """
+    circseq = circ.spliced_sequence.lower() * 2
+    res = mate.spliced_sequence.lower() in circseq
+    if not res:
+        print "WTF?"
+        print "mate",mate
+        print mate.c_start_end
+        s,e = mate.c_start_end
+        print e-s, circ.spliced_length
+        print "circ",circ
+        print circseq
+        print mate.spliced_sequence.lower()
+        print res
+
+    return res
+
 for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
 
     # keep circ name by junction coordinate for later, when we write reads and need the names!
     circ_junction_names[ (circ.chrom, circ.start, circ.end, circ.sense) ] = circ.name
 
     L = circ.spliced_length
-    if L < options.read_len:
+    if L <= options.read_len:
+        logger.warning("skipping {0} because it is shorter than read length, which is currently not supported".format(circ.name))
+        continue
+
+    # TODO: only for now to make sure that circs are comparable between different red-length runs
+    if L <= 200:
         logger.warning("skipping {0} because it is shorter than read length, which is currently not supported".format(circ.name))
         continue
 
@@ -204,13 +215,21 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
         #print circ.name, L
         #print "M1", m1_start, m1_end, m1_g_start, m1_g_end
         mate1 = circ.cut(m1_g_start, m1_g_end)
+        mate1.c_start_end = m1_start, m1_end
         #print "M2", m2_start, m2_end, m2_g_start, m2_g_end
         mate2 = circ.cut(m2_g_start, m2_g_end)
+        mate2.c_start_end = m2_start, m2_end
         
-        #print mate1
-        #print mate2
         assert mate1.spliced_length == options.read_len
         assert mate2.spliced_length == options.read_len
+        assert test_mate(mate1, circ)
+        assert test_mate(mate2, circ)
+        #if not test_mate(mate2, circ):
+            #print mate2
+            #print "origin",mate2.origin, mate2.origin_spliced
+            #print mate2.spliced_sequence
+            #print circ
+            #sys.exit(1)
         
         # simulate forward/reverse mate pairs
         mate1_seq = mate1.spliced_sequence
@@ -220,10 +239,37 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
             mate1_seq = mutate(mate1_seq, options.mut_rate)
             mate2_seq = mutate(mate2_seq, options.mut_rate)
             
-        m1_str = test_str(mate1, rec_lin = lin_counts, rec_circ = circ_counts, circ=circ)
-        m2_str = test_str(mate2, rec_lin = lin_counts, rec_circ = circ_counts, circ=circ)
+        lin_juncs = defaultdict(lambda : np.zeros(2) )
+        circ_juncs = defaultdict(lambda : np.zeros(2) )
+            
+        m1_str = test_str(mate1, lin_juncs, circ_juncs, circ=circ)
+        m2_str = test_str(mate2, lin_juncs, circ_juncs, circ=circ)
 
-        read_name = "{circ.name}_sim_{i}___{m1_str}|{m2_str}".format(**locals())
+        splices = len(lin_juncs) + len(circ_juncs)
+        if splices > 1:
+            w = 1./(splices-1)
+        else:
+            w = 1
+            
+        # store the counts
+        for coord, (counts, detectable) in lin_juncs.items():
+            lin_counts[coord] += np.array([w, 1, counts, detectable > 0])
+
+        is_detectable_circ = False
+        for coord, (counts, detectable) in circ_juncs.items():
+            if detectable:
+                is_detectable_circ = True
+            circ_counts[coord] += np.array([w, 1, counts, detectable > 0])
+        
+        if is_detectable_circ:
+            flags = "_DETECTABLE"
+        else:
+            flags = ""
+
+        #if circ_detect_long:
+            #parts.append('LONG_DETECT')
+
+        read_name = "{circ.name}_sim_{i}{flags}___{m1_str}|{m2_str}".format(**locals())
         reads_file.write(">{read_name}\n{mate1_seq}\n>{read_name}\n{mate2_seq}\n".format(**locals()) )
 
 logger.info("storing {0} linear junction span counts".format(len(lin_counts)))
