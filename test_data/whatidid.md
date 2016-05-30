@@ -109,7 +109,7 @@ We take 1000 circRNAs randomly from circBase. Analysis is further restricted to 
     do {
         ../find_circ.py run/${SAMPLE}/aligned.sam -o run/${SAMPLE} --test -G $INDEX \
             --known-lin=sim/${SAMPLE}/lin_splice_sites.bed \
-            --known-circ=sim/${SAMPLE}/circ_splice_sites.bed 2> ${SAMPLE}.jk2 &
+            --known-circ=sim/${SAMPLE}/circ_splice_sites.bed 2> run/${SAMPLE}/jk2 &
     } done;
 
     # making scatter plots
