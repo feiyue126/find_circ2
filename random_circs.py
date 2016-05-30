@@ -76,7 +76,7 @@ for line in sys.stdin:
         # remember the used exons
         exons_used |= set(exon_keys)
         n_sim += 1
-        name = "synth_{0}_exon_circ_{1}".format(n_exons, n_sim)
+        name = "syncirc{0}".format(n_sim)
         circ = Transcript(name, cand.chrom, cand.sense, exon_starts, exon_ends, (exon_starts[0], exon_starts[0]), system = options.system)
         
     if not circ:
