@@ -262,14 +262,18 @@ for circ in transcripts_from_UCSC(sys.stdin, system=system, tx_type=CircRNA):
             circ_counts[coord] += np.array([w, 1, counts, detectable > 0])
         
         if is_detectable_circ:
-            flags = "_DETECTABLE"
+            flags = "_DET"
         else:
             flags = ""
 
         #if circ_detect_long:
             #parts.append('LONG_DETECT')
 
-        read_name = "{circ.name}_sim_{i}{flags}___{m1_str}|{m2_str}".format(**locals())
+        read_name = "{circ.name}_{i}{flags}___{m1_str}|{m2_str}".format(**locals())
+        if len(read_name) > 254:
+            logger.warning("read {0} name length exceeds SAM query name limit. Dropping validation string".format(read_name))
+            read_name = read_name.split("___")[0]
+            
         reads_file.write(">{read_name}\n{mate1_seq}\n>{read_name}\n{mate2_seq}\n".format(**locals()) )
 
 logger.info("storing {0} linear junction span counts".format(len(lin_counts)))
