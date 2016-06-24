@@ -141,6 +141,14 @@ class SupportedCircRNA(CircRNA):
         else:
             return True
 
+    @property
+    def intron_str(self):
+        intron_str = " ".join(["{j.start}-{j.end}".format(j=j) for j in self.introns])
+        if not intron_str:
+            intron_str = "intronless"
+
+        return intron_str
+
     def insert_new_intron(self, left, right):
         # check if intron collides with already present intron that needs to be removed first
         middle = left + (right-left)/2
@@ -254,8 +262,8 @@ class SupportedCircRNA(CircRNA):
             # allow a little bit of misaligned coverage (default=15%), so max-score is 0.85 * L
             exon_score += min(self.min_exon_overlap*L, overlap )
 
-        if options.debug:
-            self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
+        #if options.debug:
+            #self.logger.debug('junc_ratio={0} max_exon_score={1} exon_score={2}'.format(junc_ratio, max_exon_score, exon_score))
         
         if max_exon_score:
             return 0.75 * junc_ratio + 0.25 * exon_score/max_exon_score
@@ -333,7 +341,7 @@ class ReconstructedCircIsoforms(object):
             return []
         
         isoforms = [initial]
-        all_multi_events = self.multi_events[circname]
+        all_multi_events = sorted(self.multi_events[circname])
         self.logger.debug("processing {0} multi events".format(len(all_multi_events)) )
         self.logger.debug("initial isoform: '{0}'".format(isoforms[0]) )
         # compute a square support matrix (including junctions and coverage) 
@@ -353,7 +361,15 @@ class ReconstructedCircIsoforms(object):
             # pick the first incompatible me
             i = to_process.pop(0)
             me = all_multi_events[i]
-            
+            if options.debug:
+                me_intron_str = " ".join(["{s}-{e}".format(s=s,e=e) for s,e in me.linear])
+                if not me_intron_str:
+                    me_intron_str = "intronless"
+
+                self.logger.debug("current ME: {me_intron_str}".format(me_intron_str=me_intron_str))
+                for I in isoforms:
+                    self.logger.debug("current isoform: {intron_str}".format(intron_str=I.intron_str))
+                
             # and find the best matching current isoform to start with
             ties = (matrix[:,i] == matrix[:,i].max() ).nonzero()[0]
             self.logger.debug("selecting candidates from {0}".format(matrix[:,i]) )
@@ -368,15 +384,17 @@ class ReconstructedCircIsoforms(object):
             best = isoforms[j]
             if options.debug:
                 self.logger.debug("best matched isoform {0}".format(best) )
-                self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.name) )
+                self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.intron_str) )
             
             # first take care of completely unknown junctions
             for left, right in (me.linear - best.junctions):
-                if (left in best.exon_ends_set) and (right in best.exon_starts_set):
+                left_known = (left in best.exon_ends_set)
+                right_known = (right in best.exon_starts_set)
+                if left_known and right_known:
                     self.logger.debug("  discovered skipped exon {left}-{right}".format(left=left, right=right))
                     new_iso = best.skip_exons_between(left, right)
                     assert new_iso.splice_support(left, right)
-                else:
+                elif not (left_known or right_known):
                     self.logger.debug("  discovered new intron {left}-{right}".format(**locals()))
                     new_iso = best.insert_new_intron(left, right)
                     assert new_iso.splice_support(left, right)
@@ -386,14 +404,14 @@ class ReconstructedCircIsoforms(object):
             # next, take care of alternative 5' and 3' end positions.
             for start in (me.exon_starts_set - best.exon_starts_set):
                 end = me.exon_bound_lookup[start]
-                self.logger.debug("  discovered alternative exon start {left}".format(left=left))
+                self.logger.debug("  discovered alternative exon start {pos}".format(pos=start))
                 new_iso = best.adjust_exon_start(start, end)
                 assert new_iso.splice_support(start, end)
                 best = new_iso
 
             for end in (me.exon_ends_set - best.exon_ends_set):
                 start = me.exon_bound_lookup[end]
-                self.logger.debug("  discovered alternative exon end {left}".format(right=right))
+                self.logger.debug("  discovered alternative exon end {pos}, with known start at {start}".format(pos=end, start=start))
                 new_iso = best.adjust_exon_end(start, end)
                 assert new_iso.splice_support(start, end)
                 best = new_iso
