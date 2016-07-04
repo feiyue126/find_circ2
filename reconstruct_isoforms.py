@@ -121,6 +121,18 @@ class SupportedCircRNA(CircRNA):
         self.junctions = set([ (min(left, right), max(left, right)) for left, right in self.intron_bounds])
         self.exon_starts_set = set(self.exon_starts) 
         self.exon_ends_set = set(self.exon_ends)
+
+        self.exon_bound_lookup = {}
+        for start, end in zip(self.exon_starts, self.exon_ends):
+            self.exon_bound_lookup[start] = end
+            self.exon_bound_lookup[end] = start
+
+        self.intron_bound_lookup = {}
+        if len(self.exon_starts) > 1:
+            for left, right in zip(self.exon_ends[:-1], self.exon_starts[1:]):
+                self.intron_bound_lookup[left] = right
+                self.intron_bound_lookup[right] = left
+        
         self.reset_counts()
 
     def reset_counts(self):
@@ -218,6 +230,30 @@ class SupportedCircRNA(CircRNA):
         
         return SupportedCircRNA("{0}_adj_end_{1}:{2}".format(self.name, i, left), self.chrom, self.sense, new_exon_starts, new_exon_ends)
 
+    def adjust_left_intron(self, new_left, right):
+        left = self.intron_bound_lookup[right]
+
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+        
+        # find exon by start coordinate
+        i = new_exon_ends.index(left)
+        new_exon_ends[i] = new_left
+
+        return SupportedCircRNA("{0}_adj_l{1}:{2}".format(self.name, left, new_left), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+
+    def adjust_right_intron(self, left, new_right):
+        right = self.intron_bound_lookup[left]
+
+        new_exon_starts = list(self.exon_starts)
+        new_exon_ends = list(self.exon_ends)
+        
+        # find exon by start coordinate
+        i = new_exon_starts.index(right)
+        new_exon_starts[i] = new_right
+
+        return SupportedCircRNA("{0}_adj_r{1}:{2}".format(self.name, right, new_right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+            
     def skip_exons_between(self, left, right):
         new_exon_starts = list(self.exon_starts)
         new_exon_ends = list(self.exon_ends)
@@ -293,6 +329,12 @@ class MultiEvent(object):
             self.exon_bound_lookup[start] = end
             self.exon_bound_lookup[end] = start
 
+        self.intron_bound_lookup = {}
+        if len(self.exon_starts) > 1:
+            for left, right in zip(self.exon_ends[:-1], self.exon_starts[1:]):
+                self.intron_bound_lookup[left] = right
+                self.intron_bound_lookup[right] = left
+
     def __str__(self):
         return "MultiEvent({self.chrom}, start={self.start}, end={self.end}, score={self.score}, sense={self.sense}, read_name={self.read_name}, linear={self.linear}, unspliced={self.unspliced})".format(self=self)
 
@@ -306,7 +348,7 @@ class ReconstructedCircIsoforms(object):
 
         # TODO: percent spliced in metric output
         self.psi = {}
-
+        
     def reconstruct(self,circname):
         if not circname in self.multi_events:
             return []
@@ -358,6 +400,7 @@ class ReconstructedCircIsoforms(object):
             if len(isoforms) > options.max_isoforms:
                 self.logger.error("exhausted maximal number of candidate isoforms on circRNA {0}".format(circname))
                 return []
+
             # pick the first incompatible me
             i = to_process.pop(0)
             me = all_multi_events[i]
@@ -377,14 +420,13 @@ class ReconstructedCircIsoforms(object):
             # in case of ties, pick the one with more junctions to avoid fragmentation
             scores = [(isoforms[ind].exon_count, ind) for ind in ties]
             if options.debug:
-                self.logger.debug("ties={0}".format(ties))
-                self.logger.debug("scores={0}".format(scores))
+                self.logger.debug("ties={0} scores={1}".format(ties, scores))
             j = sorted(scores, reverse=True)[0][1]
             
             best = isoforms[j]
-            if options.debug:
-                self.logger.debug("best matched isoform {0}".format(best) )
-                self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.intron_str) )
+            #if options.debug:
+                #self.logger.debug("best matched isoform {0}".format(best) )
+                #self.logger.debug("selected incompatible me {0} (readname={3}) and best-matched isoform {1} ({4}) at compatibility_score {2}".format(i,j, matrix[j][i], me.read_name, best.intron_str) )
             
             # first take care of completely unknown junctions
             for left, right in (me.linear - best.junctions):
@@ -402,18 +444,20 @@ class ReconstructedCircIsoforms(object):
                 best = new_iso
 
             # next, take care of alternative 5' and 3' end positions.
-            for start in (me.exon_starts_set - best.exon_starts_set):
-                end = me.exon_bound_lookup[start]
-                self.logger.debug("  discovered alternative exon start {pos}".format(pos=start))
-                new_iso = best.adjust_exon_start(start, end)
-                assert new_iso.splice_support(start, end)
+            for new_right in (me.exon_starts_set - best.exon_starts_set):
+                left = me.intron_bound_lookup[new_right]
+                known_right = best.intron_bound_lookup[left]
+                self.logger.debug("  discovered alternative right splice site {new_right} instead of known site {known_right}".format(new_right=new_right, known_right=known_right))
+                new_iso = best.adjust_right_intron(left, new_right)
+                assert new_iso.splice_support(left, new_right)
                 best = new_iso
 
-            for end in (me.exon_ends_set - best.exon_ends_set):
-                start = me.exon_bound_lookup[end]
-                self.logger.debug("  discovered alternative exon end {pos}, with known start at {start}".format(pos=end, start=start))
-                new_iso = best.adjust_exon_end(start, end)
-                assert new_iso.splice_support(start, end)
+            for new_left in (me.exon_ends_set - best.exon_ends_set):
+                right = me.intron_bound_lookup[new_left]
+                known_left = best.intron_bound_lookup[right]
+                self.logger.debug("  discovered alternative left splice site {new_left} instead of known site {known_left}".format(new_left=new_left, known_left=known_left))                
+                new_iso = best.adjust_left_intron(new_left, right)
+                assert new_iso.splice_support(new_left, right)
                 best = new_iso
 
             # finally, if there is unspliced coverage in an intronic region, remove this intron
