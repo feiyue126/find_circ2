@@ -146,13 +146,23 @@ class SupportedCircRNA(CircRNA):
             return True
 
     def exon_support(self,start,end):
-        intersect = self.cut(start,end)
+        L = end - start
         
-        if intersect.spliced_length < (end-start) * self.min_exon_overlap:
-            return False
+        # quick heuristic for finding the correct exon this guy should overlap with
+        middle = start + (end-start)/2.
+        try:
+            pos = self.map_to_spliced(middle)
+        except ValueError:
+            self.logger.debug("no overlap detected for {me.name}".format(me=me))
+            overlap = 0
         else:
-            return True
-
+            n_exon = self.map_to_exon(pos)
+            overlap_start = max(start, self.exon_starts[n_exon])
+            overlap_end = min(end, self.exon_ends[n_exon])
+            overlap = overlap_end - overlap_start
+        
+        return float(overlap) / L
+        
     @property
     def intron_str(self):
         intron_str = " ".join(["{j.start}-{j.end}".format(j=j) for j in self.introns])
@@ -185,30 +195,31 @@ class SupportedCircRNA(CircRNA):
             chain = chain.adjust_exon_end(left, self.exon_starts[i])
             #print "after second adjust"
             #print chain
-            chain.name = "{0}_adjusted_intron_{1}-{2}".format(chain.name, left, right)
+            chain.name = "{0}_adj_intron_{1}-{2}".format(chain.name, left, right)
             #print "spliced_length", chain.spliced_length
             return chain
         else:
             new_exon_starts = sorted(list(self.exon_starts) + [right])
             new_exon_ends = sorted(list(self.exon_ends) + [left])
         
-            return SupportedCircRNA("{0}_add_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+            return SupportedCircRNA("{0}_intron_{1}-{2}".format(self.name, left, right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
     
     def remove_intron_overlapping(self, left, right):
         #self.logger.debug("remove_intron_overlapping(): initial exon_starts={0} exon_ends={1}".format(self.exon_starts, self.exon_ends) )
-        start_i = max(bisect.bisect_left(self.exon_starts, right),1)
-        end_i = min(bisect.bisect_left(self.exon_ends, left)+1,self.exon_count-1)
-        #self.logger.debug("remove_intron_overlapping(): start_i={0} end_i={1}".format(start_i, end_i) )
+        #right_i = max(bisect.bisect_left(self.exon_starts, right),1)
+        right_i = bisect.bisect_right(self.exon_ends, right)
+        left_i = bisect.bisect_left(self.exon_starts, left)
+        #self.logger.debug("remove_intron_overlapping(): left_i={0} right_i={1}".format(left_i, right_i) )
         
-        drop_left= self.exon_ends[start_i-1]
-        drop_right= self.exon_starts[end_i]
+        drop_left= self.exon_ends[left_i-1]
+        drop_right= self.exon_starts[right_i]
         #self.logger.debug("remove_intron_overlapping(): drop_left={0} drop_right={1}".format(drop_left, drop_right) )
         
-        new_exon_starts = list(self.exon_starts[:start_i]) + list(self.exon_starts[end_i+1:])
-        new_exon_ends = list(self.exon_ends[:start_i-1]) + list(self.exon_ends[end_i:])
+        new_exon_starts = list(self.exon_starts[:left_i]) + list(self.exon_starts[right_i+1:])
+        new_exon_ends = list(self.exon_ends[:left_i-1]) + list(self.exon_ends[right_i:])
         
         #self.logger.debug("remove_intron_overlapping(): new exon_starts={0} exon_ends={1}".format(new_exon_starts, new_exon_ends) )
-        return SupportedCircRNA("{0}_drop_intron_{1}-{2}".format(self.name, drop_left, drop_right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
+        return SupportedCircRNA("{0}_ir_{1}-{2}".format(self.name, drop_left, drop_right), self.chrom, self.sense, new_exon_starts, new_exon_ends)
         
     def adjust_exon_start(self, left, right):
         new_exon_starts = list(self.exon_starts)
@@ -351,8 +362,18 @@ class MultiEvent(object):
     def __str__(self):
         return "MultiEvent({self.name} {self.chrom}:{self.start}-{self.end}:{self.sense} score={self.score}, read_name={self.read_name}, linear={self.linear}, unspliced={self.unspliced})".format(self=self)
 
+    @property
+    def brief_str(self):
+        brief = " ".join(["{s}-{e}".format(s=s,e=e) for s,e in self.linear])
+        if not brief:
+            brief = "intronless"
+        if self.unspliced:
+            brief += " unspliced: " + " ".join(["{s}-{e}".format(s=s,e=e) for s,e in self.unspliced])
+
+        return brief
+
 class ReconstructedCircIsoforms(object):
-    def __init__(self, multi_event_source, known_exon_storage = known_exons):
+    def __init__(self, multi_event_source, known_exon_storage = known_exons, ir_threshold=.5):
         self.multi_events = defaultdict(list)
         self.logger = logging.getLogger("ReconstructedCircIsoforms")
         self.known_exon_storage = known_exon_storage
@@ -361,6 +382,7 @@ class ReconstructedCircIsoforms(object):
 
         # TODO: percent spliced in metric output
         self.psi = {}
+        self.ir_threshold = ir_threshold
         
     def reconstruct(self,circname):
         if not circname in self.multi_events:
@@ -418,13 +440,9 @@ class ReconstructedCircIsoforms(object):
             i = to_process.pop(0)
             me = all_multi_events[i]
             if options.debug:
-                me_intron_str = " ".join(["{s}-{e}".format(s=s,e=e) for s,e in me.linear])
-                if not me_intron_str:
-                    me_intron_str = "intronless"
-
-                self.logger.debug(" -ME: {me_intron_str}".format(me_intron_str=me_intron_str))
+                self.logger.debug("  -ME: {me_intron_str}".format(me_intron_str=me.brief_str))
                 for I in isoforms:
-                    self.logger.debug(" -iso: {intron_str}".format(intron_str=I.intron_str))
+                    self.logger.debug("   -iso: {intron_str}".format(intron_str=I.intron_str))
                 
             # and find the best matching current isoform to start with
             best_score = matrix[:,i].max()
@@ -434,7 +452,7 @@ class ReconstructedCircIsoforms(object):
             # in case of ties, pick the one with more junctions to avoid fragmentation
             scores = [(isoforms[ind].exon_count, ind) for ind in ties]
             if options.debug:
-                self.logger.debug(" -(ties={0} scores={1} -> best = {2})".format(ties, scores, I.intron_str))
+                self.logger.debug("  -(ties={0} scores={1} -> best = {2})".format(ties, scores, I.intron_str))
             j = sorted(scores, reverse=True)[0][1]
             
             best = isoforms[j]
@@ -451,27 +469,27 @@ class ReconstructedCircIsoforms(object):
                 left, right = junc
                 left_known = (left in best.exon_ends_set)
                 right_known = (right in best.exon_starts_set)
-                self.logger.debug(" testing splice site {left}-{right} {left_known} {right_known}".format(**locals()))
+                self.logger.debug("  testing splice site {left}-{right} {left_known} {right_known}".format(**locals()))
                 
                 if left_known and right_known:
-                    self.logger.debug("  discovered skipped exon {left}-{right}".format(left=left, right=right))
+                    self.logger.debug("  * discovered skipped exon {left}-{right}".format(left=left, right=right))
                     new_iso = best.skip_exons_between(left, right)
                     assert new_iso.splice_support(left, right)
                 
                 elif not (left_known or right_known):
-                    self.logger.debug("  discovered new intron {left}-{right}".format(**locals()))
+                    self.logger.debug("  * discovered new intron {left}-{right}".format(**locals()))
                     new_iso = best.insert_new_intron(left, right)
                     assert new_iso.splice_support(left, right)
                 
                 elif not right_known:
                     known_right = best.intron_bound_lookup[left]
-                    self.logger.debug("  discovered alternative right splice site {right} instead of known site {known_right}".format(right=right, known_right=known_right))
+                    self.logger.debug("  * discovered alternative right splice site {right} instead of known site {known_right}".format(right=right, known_right=known_right))
                     new_iso = best.adjust_right_intron(left, right)
                     assert new_iso.splice_support(left, right)
                 
                 elif not left_known:
                     known_left = best.intron_bound_lookup[right]
-                    self.logger.debug("  discovered alternative left splice site {left} instead of known site {known_left}".format(left=left, known_left=known_left))                
+                    self.logger.debug("  * discovered alternative left splice site {left} instead of known site {known_left}".format(left=left, known_left=known_left))                
                     new_iso = best.adjust_left_intron(left, right)
                     assert new_iso.splice_support(left, right)
                 
@@ -479,10 +497,13 @@ class ReconstructedCircIsoforms(object):
 
             # finally, if there is unspliced coverage in an intronic region, remove this intron
             for start, end in me.unspliced:
-                if best.start <= start < end <= best.end and not best.exon_support(start,end):
+                supp = best.exon_support(start,end)
+                self.logger.debug(" exon_support({0},{1}) = {2}".format(start,end,supp))
+                if best.start <= start < end <= best.end and supp < (1 - self.ir_threshold):
                     #print "Need new exon or retained intron"
-                    self.logger.debug("  removing intron with unspliced coverage from {start}-{end}".format(start=start, end=end) )
+                    self.logger.debug("  * removing intron(s) with unspliced coverage from {start}-{end}".format(start=start, end=end) )
                     new_iso = best.remove_intron_overlapping(start, end)
+                    self.logger.debug("    new iso after intron removal: {0}".format(new_iso.intron_str))
                     best = new_iso
 
             # test if we actually changed something?
