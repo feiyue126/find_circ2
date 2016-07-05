@@ -153,7 +153,7 @@ class SupportedCircRNA(CircRNA):
         try:
             pos = self.map_to_spliced(middle)
         except ValueError:
-            self.logger.debug("no overlap detected for {me.name}".format(me=me))
+            self.logger.debug("no overlap detected for {me.name}".format(me=self))
             overlap = 0
         else:
             n_exon = self.map_to_exon(pos)
